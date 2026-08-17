@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LLM Wiki Browser Executor</title>
+    <link rel="stylesheet" href="sidepanel.css">
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">LLM WIKI</p>
+      <h1>Browser executor</h1>
+      <p class="summary">
+        Targeted private adapters send exact, revision-bound jobs through the
+        local connector. This panel never displays page or job content.
+      </p>
+      <section class="status" aria-live="polite">
+        <span id="indicator" class="indicator"></span>
+        <div>
+          <strong id="state">Checking local connector…</strong>
+          <p id="detail"></p>
+        </div>
+      </section>
+      <p class="note">
+        No interaction is required here. Provider planning, authorization, and
+        verification remain in the targeted adapter.
+      </p>
+    </main>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

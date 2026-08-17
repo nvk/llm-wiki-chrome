@@ -1,0 +1,23 @@
+{
+  "protocol": "llm-wiki-adapter/v1",
+  "id": "browser-execution",
+  "version": "0.0.1",
+  "description": "Private content-free foundation for exact-target typed browser execution used by targeted llm-wiki adapters.",
+  "distribution": "private",
+  "entrypoint": [".venv/bin/python", "adapter.py"],
+  "capabilities": [
+    "browser-executor-protocol-validation",
+    "browser-executor-native-messaging",
+    "browser-executor-content-free-status"
+  ],
+  "routes": [],
+  "network": "none",
+  "writes_wiki": false,
+  "operations": {
+    "self-test": {
+      "read_arguments": [],
+      "requires_output_dir": false
+    }
+  },
+  "output_classes": []
+}

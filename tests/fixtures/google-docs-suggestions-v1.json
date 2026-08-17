@@ -1,0 +1,67 @@
+{
+  "protocol": "llm-wiki-browser-executor/v1",
+  "program_id": "synthetic-google-docs-suggestions-v1",
+  "program_sha256": "2c09c74a4ddfe5db13fe206119a56edf98040583d0e574a4489d8bbb24b200c3",
+  "plan_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "driver": {"id": "google-docs-suggestions", "version": "spike-1"},
+  "capability": "mutation",
+  "target": {
+    "url": "https://docs.google.com/document/d/SYNTHETIC_DOCUMENT/edit",
+    "origin": "https://docs.google.com",
+    "path_prefixes": ["/document/d/SYNTHETIC_DOCUMENT/"]
+  },
+  "limits": {"timeout_ms": 120000, "max_actions": 100, "max_repeat": 8},
+  "private_slots": ["edit.find", "edit.replace"],
+  "actions": [
+    {"op": "open_or_focus_exact_url"},
+    {"op": "assert_exact_target"},
+    {"op": "attach_debugger"},
+    {
+      "op": "wait_ax",
+      "locator": {"role": "button", "name_contains_any": ["editing", "suggesting", "viewing"]},
+      "timeout_ms": 30000
+    },
+    {
+      "op": "first_success",
+      "branches": [
+        [
+          {"op": "dispatch_key_chord", "keys": ["platform-primary", "shift", "x"]},
+          {"op": "wait_ax", "locator": {"role": "button", "name_contains": "suggesting"}, "timeout_ms": 3000}
+        ],
+        [
+          {"op": "click_dom", "locator": {"selector": "#docs-mode-switcher-select", "visible": true}},
+          {"op": "click_ax", "locator": {"roles": ["menuitem", "menuitemradio"], "name": "Suggesting"}}
+        ]
+      ]
+    },
+    {"op": "assert_ax", "locator": {"role": "button", "name_contains": "suggesting"}},
+    {
+      "op": "first_success",
+      "branches": [
+        [
+          {"op": "click_dom", "locator": {"selector": "#docs-edit-menu", "visible": true}},
+          {"op": "click_ax", "locator": {"roles": ["menuitem", "menuitemradio"], "name": "Find and replace"}}
+        ],
+        [
+          {"op": "dispatch_key_chord", "keys": ["platform-primary", "shift", "h"]},
+          {"op": "wait_ax", "locator": {"role": "dialog", "name": "Find and replace"}, "timeout_ms": 5000}
+        ]
+      ]
+    },
+    {"op": "focus_ax", "locator": {"role": "textbox", "ordinal": 0, "within": {"role": "dialog", "name": "Find and replace"}}},
+    {"op": "insert_private_text", "slot": "edit.find", "replace_all": true},
+    {"op": "assert_ax_private_value", "slot": "edit.find"},
+    {"op": "focus_ax", "locator": {"role": "textbox", "ordinal": 1, "within": {"role": "dialog", "name": "Find and replace"}}},
+    {"op": "insert_private_text", "slot": "edit.replace", "replace_all": true},
+    {"op": "assert_ax_private_value", "slot": "edit.replace"},
+    {"op": "assert_ax", "locator": {"role": "statictext", "name_matches": "^1 of 1$"}},
+    {"op": "before_mutation"},
+    {"op": "click_ax", "locator": {"role": "button", "name": "Replace"}},
+    {"op": "assert_ax", "locator": {"role": "button", "name_contains": "suggesting"}},
+    {"op": "detach_debugger"}
+  ],
+  "result": {
+    "public_fields": ["status", "action_count", "mutation_started"],
+    "private_fields": []
+  }
+}

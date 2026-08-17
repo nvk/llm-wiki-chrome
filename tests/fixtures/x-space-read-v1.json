@@ -1,0 +1,56 @@
+{
+  "protocol": "llm-wiki-browser-executor/v1",
+  "program_id": "synthetic-x-space-read-v1",
+  "program_sha256": "ee10a217f2caa9e701dc2b9c6ca38a33e2fe9fcbacea036319754466c42d83fd",
+  "plan_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "driver": {"id": "x-space-read", "version": "spike-1"},
+  "capability": "read",
+  "target": {
+    "url": "https://x.com/i/spaces/SYNTHETIC_SPACE",
+    "origin": "https://x.com",
+    "path_prefixes": ["/i/spaces/SYNTHETIC_SPACE"]
+  },
+  "limits": {"timeout_ms": 60000, "max_actions": 40, "max_repeat": 6},
+  "private_slots": [],
+  "actions": [
+    {"op": "open_or_focus_exact_url"},
+    {"op": "assert_exact_target"},
+    {"op": "attach_debugger"},
+    {
+      "op": "wait_ax",
+      "locator": {"roles": ["main", "dialog"], "name_contains_any": ["space", "listeners", "speakers"]},
+      "timeout_ms": 30000
+    },
+    {
+      "op": "first_success",
+      "branches": [
+        [
+          {"op": "click_ax", "locator": {"role": "button", "name_contains_any": ["people", "listeners", "participants"]}},
+          {"op": "wait_ax", "locator": {"roles": ["dialog", "list"], "name_contains_any": ["people", "listeners", "participants"]}, "timeout_ms": 5000}
+        ],
+        [
+          {"op": "wait_dom", "locator": {"selector": "[data-testid='synthetic-space-attendee-list']", "visible": true}, "timeout_ms": 5000}
+        ]
+      ]
+    },
+    {
+      "op": "extract_ax_collection",
+      "locator": {"roles": ["listitem", "link"], "within_name_contains_any": ["people", "listeners", "participants"]},
+      "fields": ["name", "role"],
+      "private_result": "space.attendees",
+      "max_items": 5000
+    },
+    {
+      "op": "extract_ax",
+      "locator": {"roles": ["heading", "statictext"], "name_contains": "space"},
+      "fields": ["name"],
+      "private_result": "space.metadata",
+      "max_items": 20
+    },
+    {"op": "detach_debugger"}
+  ],
+  "result": {
+    "public_fields": ["status", "action_count", "private_result_count"],
+    "private_fields": ["space.attendees", "space.metadata"]
+  }
+}

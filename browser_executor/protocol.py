@@ -1,0 +1,423 @@
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import re
+from typing import Any, Iterator
+from urllib.parse import urlsplit
+
+BROWSER_PROTOCOL = "llm-wiki-browser-executor/v1"
+IDENTIFIER = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+SHA256 = re.compile(r"^[a-f0-9]{64}$")
+PROGRAM_IDENTIFIER = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$")
+PRIVATE_FIELD = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$")
+
+MAX_PROGRAM_BYTES = 262_144
+MAX_STRING_BYTES = 16_384
+TOP_LEVEL_KEYS = {
+    "protocol",
+    "program_id",
+    "program_sha256",
+    "plan_sha256",
+    "driver",
+    "capability",
+    "target",
+    "limits",
+    "private_slots",
+    "actions",
+    "result",
+}
+
+ALLOWED_OPERATIONS = {
+    "open_or_focus_exact_url",
+    "assert_exact_target",
+    "attach_debugger",
+    "detach_debugger",
+    "wait_ax",
+    "wait_dom",
+    "assert_ax",
+    "first_success",
+    "click_ax",
+    "click_dom",
+    "focus_ax",
+    "dispatch_key_chord",
+    "insert_private_text",
+    "assert_ax_private_value",
+    "extract_ax",
+    "extract_ax_collection",
+    "before_mutation",
+}
+FORBIDDEN_KEYS = {
+    "javascript",
+    "script",
+    "expression",
+    "runtime_evaluate",
+    "cdp_method",
+    "cookie",
+    "storage",
+    "network",
+}
+MUTATION_ONLY = {"insert_private_text", "before_mutation"}
+PUBLIC_RESULT_FIELDS = {
+    "status",
+    "action_count",
+    "mutation_started",
+    "private_result_count",
+}
+LOCATOR_KEYS = {
+    "selector",
+    "role",
+    "roles",
+    "name",
+    "name_contains",
+    "name_contains_any",
+    "name_matches",
+    "within",
+    "within_name_contains_any",
+    "ordinal",
+    "visible",
+    "checked",
+    "focused",
+    "unique",
+}
+ACTION_KEYS = {
+    "open_or_focus_exact_url": {"op"},
+    "assert_exact_target": {"op"},
+    "attach_debugger": {"op"},
+    "detach_debugger": {"op"},
+    "before_mutation": {"op"},
+    "wait_ax": {"op", "locator", "timeout_ms"},
+    "wait_dom": {"op", "locator", "timeout_ms"},
+    "assert_ax": {"op", "locator"},
+    "click_ax": {"op", "locator"},
+    "click_dom": {"op", "locator"},
+    "focus_ax": {"op", "locator"},
+    "dispatch_key_chord": {"op", "keys"},
+    "insert_private_text": {"op", "slot", "replace_all"},
+    "assert_ax_private_value": {"op", "slot"},
+    "extract_ax": {"op", "locator", "fields", "private_result", "max_items"},
+    "extract_ax_collection": {"op", "locator", "fields", "private_result", "max_items"},
+    "first_success": {"op", "branches"},
+}
+LOCATOR_OPERATIONS = {
+    "wait_ax",
+    "wait_dom",
+    "assert_ax",
+    "click_ax",
+    "click_dom",
+    "focus_ax",
+    "extract_ax",
+    "extract_ax_collection",
+}
+EXTRACTION_FIELDS = {"name", "role", "value", "checked", "focused"}
+KEY_NAMES = {
+    "platform-primary",
+    "control",
+    "meta",
+    "alt",
+    "shift",
+    "enter",
+    "escape",
+    "tab",
+    "arrow-up",
+    "arrow-down",
+    "arrow-left",
+    "arrow-right",
+    "backspace",
+    "delete",
+    *tuple("abcdefghijklmnopqrstuvwxyz"),
+    *tuple("0123456789"),
+}
+
+
+class ProtocolError(ValueError):
+    """Raised when a browser execution program exceeds its bounded contract."""
+
+
+def canonical_json(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def canonical_program_sha256(program: dict[str, Any]) -> str:
+    value = copy.deepcopy(program)
+    value.pop("program_sha256", None)
+    return hashlib.sha256(canonical_json(value)).hexdigest()
+
+
+def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], path: str) -> None:
+    unknown = set(value).difference(allowed)
+    if unknown:
+        raise ProtocolError(f"{path} contains unsupported fields")
+
+
+def _bounded_string(value: Any, path: str, *, pattern: re.Pattern[str] | None = None) -> str:
+    if not isinstance(value, str) or not value:
+        raise ProtocolError(f"{path} must be a non-empty string")
+    if len(value.encode("utf-8")) > MAX_STRING_BYTES:
+        raise ProtocolError(f"{path} is too large")
+    if pattern is not None and not pattern.fullmatch(value):
+        raise ProtocolError(f"{path} has an invalid identifier")
+    return value
+
+
+def _check_forbidden_keys(value: Any, path: str = "program") -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            lowered = str(key).lower()
+            if lowered in FORBIDDEN_KEYS:
+                raise ProtocolError(f"{path} contains forbidden key {key!r}")
+            _check_forbidden_keys(child, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _check_forbidden_keys(child, f"{path}[{index}]")
+
+
+def iter_actions(actions: list[dict[str, Any]], depth: int = 0) -> Iterator[dict[str, Any]]:
+    if depth > 4:
+        raise ProtocolError("action nesting exceeds four levels")
+    for action in actions:
+        if not isinstance(action, dict):
+            raise ProtocolError("every action must be an object")
+        yield action
+        branches = action.get("branches")
+        if action.get("op") == "first_success":
+            if not isinstance(branches, list) or not 1 <= len(branches) <= 4:
+                raise ProtocolError("first_success requires one to four branches")
+            for branch in branches:
+                if not isinstance(branch, list) or not branch:
+                    raise ProtocolError("first_success branches must be non-empty arrays")
+                yield from iter_actions(branch, depth + 1)
+        elif branches is not None:
+            raise ProtocolError("only first_success may contain branches")
+
+
+def _validate_target(target: Any) -> None:
+    if not isinstance(target, dict):
+        raise ProtocolError("target must be an object")
+    _reject_unknown_keys(target, {"url", "origin", "path_prefixes"}, "target")
+    raw_url = target.get("url")
+    raw_origin = target.get("origin")
+    if not isinstance(raw_url, str) or not isinstance(raw_origin, str):
+        raise ProtocolError("target url and origin must be strings")
+    url = urlsplit(raw_url)
+    origin = urlsplit(raw_origin)
+    if (
+        url.scheme != "https"
+        or origin.scheme != "https"
+        or not url.hostname
+        or url.username is not None
+        or url.password is not None
+        or url.fragment
+    ):
+        raise ProtocolError("target must use an exact HTTPS URL and origin")
+    expected_origin = f"{url.scheme}://{url.netloc}"
+    if raw_origin != expected_origin or origin.path or origin.query or origin.fragment:
+        raise ProtocolError("target origin does not exactly match the target URL")
+    prefixes = target.get("path_prefixes")
+    if not isinstance(prefixes, list) or not prefixes:
+        raise ProtocolError("target requires at least one path prefix")
+    if len(prefixes) > 8:
+        raise ProtocolError("target path prefixes must be unique and bounded")
+    if not all(
+        isinstance(item, str)
+        and item.startswith("/")
+        and "?" not in item
+        and "#" not in item
+        and len(item.encode("utf-8")) <= 2048
+        for item in prefixes
+    ):
+        raise ProtocolError("target path prefixes must be absolute paths")
+    if len(prefixes) != len(set(prefixes)):
+        raise ProtocolError("target path prefixes must be unique and bounded")
+    if not any(url.path.startswith(item) for item in prefixes):
+        raise ProtocolError("target URL is outside its approved path prefixes")
+
+
+def _validate_limits(limits: Any) -> dict[str, int]:
+    if not isinstance(limits, dict):
+        raise ProtocolError("limits must be an object")
+    _reject_unknown_keys(limits, {"timeout_ms", "max_actions", "max_repeat"}, "limits")
+    timeout = limits.get("timeout_ms")
+    maximum = limits.get("max_actions")
+    repeat = limits.get("max_repeat")
+    if type(timeout) is not int or not 1000 <= timeout <= 300000:
+        raise ProtocolError("timeout_ms must be between 1000 and 300000")
+    if type(maximum) is not int or not 1 <= maximum <= 200:
+        raise ProtocolError("max_actions must be between 1 and 200")
+    if type(repeat) is not int or not 1 <= repeat <= 20:
+        raise ProtocolError("max_repeat must be between 1 and 20")
+    return {"timeout_ms": timeout, "max_actions": maximum, "max_repeat": repeat}
+
+
+def _validate_locator(locator: Any, path: str, depth: int = 0) -> None:
+    if depth > 2 or not isinstance(locator, dict) or not locator:
+        raise ProtocolError(f"{path} must be a bounded locator object")
+    _reject_unknown_keys(locator, LOCATOR_KEYS, path)
+    if "selector" in locator:
+        _bounded_string(locator["selector"], f"{path}.selector")
+    if "role" in locator:
+        _bounded_string(locator["role"], f"{path}.role", pattern=IDENTIFIER)
+    if "roles" in locator:
+        roles = locator["roles"]
+        if (
+            not isinstance(roles, list)
+            or not 1 <= len(roles) <= 8
+            or not all(isinstance(item, str) and IDENTIFIER.fullmatch(item) for item in roles)
+        ):
+            raise ProtocolError(f"{path}.roles must be unique role identifiers")
+        if len(roles) != len(set(roles)):
+            raise ProtocolError(f"{path}.roles must be unique role identifiers")
+    for key in ("name", "name_contains", "name_matches"):
+        if key in locator:
+            _bounded_string(locator[key], f"{path}.{key}")
+    for key in ("name_contains_any", "within_name_contains_any"):
+        if key in locator:
+            items = locator[key]
+            if (
+                not isinstance(items, list)
+                or not 1 <= len(items) <= 12
+                or not all(isinstance(item, str) and item and len(item.encode("utf-8")) <= 512 for item in items)
+            ):
+                raise ProtocolError(f"{path}.{key} must be a bounded string array")
+    if "ordinal" in locator and (
+        type(locator["ordinal"]) is not int or not 0 <= locator["ordinal"] <= 1000
+    ):
+        raise ProtocolError(f"{path}.ordinal is out of bounds")
+    for key in ("visible", "checked", "focused", "unique"):
+        if key in locator and not isinstance(locator[key], bool):
+            raise ProtocolError(f"{path}.{key} must be boolean")
+    if "within" in locator:
+        _validate_locator(locator["within"], f"{path}.within", depth + 1)
+
+
+def _validate_action(action: dict[str, Any], slots: set[str], private_results: set[str], index: int) -> None:
+    operation = action.get("op")
+    if operation not in ALLOWED_OPERATIONS:
+        raise ProtocolError("program contains an unsupported operation")
+    _reject_unknown_keys(action, ACTION_KEYS[operation], f"action[{index}]")
+    if operation in LOCATOR_OPERATIONS:
+        _validate_locator(action.get("locator"), f"action[{index}].locator")
+    if operation in {"wait_ax", "wait_dom"}:
+        timeout = action.get("timeout_ms")
+        if type(timeout) is not int or not 50 <= timeout <= 300000:
+            raise ProtocolError("wait timeout_ms must be between 50 and 300000")
+    if operation == "dispatch_key_chord":
+        keys = action.get("keys")
+        if (
+            not isinstance(keys, list)
+            or not 1 <= len(keys) <= 5
+            or not all(isinstance(key, str) and key in KEY_NAMES for key in keys)
+        ):
+            raise ProtocolError("key chord is invalid or unbounded")
+        if len(keys) != len(set(keys)):
+            raise ProtocolError("key chord is invalid or unbounded")
+    if operation in {"insert_private_text", "assert_ax_private_value"}:
+        if action.get("slot") not in slots:
+            raise ProtocolError("action references an undeclared private slot")
+        if operation == "insert_private_text" and not isinstance(action.get("replace_all"), bool):
+            raise ProtocolError("insert_private_text requires replace_all")
+    if operation in {"extract_ax", "extract_ax_collection"}:
+        fields = action.get("fields")
+        if (
+            not isinstance(fields, list)
+            or not 1 <= len(fields) <= len(EXTRACTION_FIELDS)
+            or not all(isinstance(field, str) for field in fields)
+            or not set(fields).issubset(EXTRACTION_FIELDS)
+        ):
+            raise ProtocolError("extraction fields are invalid")
+        if len(fields) != len(set(fields)):
+            raise ProtocolError("extraction fields are invalid")
+        private_result = action.get("private_result")
+        if private_result not in private_results:
+            raise ProtocolError("extraction references an undeclared private result")
+        max_items = action.get("max_items")
+        maximum = 5000 if operation == "extract_ax_collection" else 100
+        if type(max_items) is not int or not 1 <= max_items <= maximum:
+            raise ProtocolError("extraction max_items is out of bounds")
+
+
+def validate_program(program: Any) -> dict[str, Any]:
+    if not isinstance(program, dict):
+        raise ProtocolError("program must be an object")
+    if len(canonical_json(program)) > MAX_PROGRAM_BYTES:
+        raise ProtocolError("program is too large")
+    _reject_unknown_keys(program, TOP_LEVEL_KEYS, "program")
+    _check_forbidden_keys(program)
+    if program.get("protocol") != BROWSER_PROTOCOL:
+        raise ProtocolError("unsupported browser executor protocol")
+    _bounded_string(program.get("program_id"), "program_id", pattern=PROGRAM_IDENTIFIER)
+    if not SHA256.fullmatch(str(program.get("plan_sha256", ""))):
+        raise ProtocolError("plan_sha256 must be lowercase hexadecimal SHA-256")
+    if not SHA256.fullmatch(str(program.get("program_sha256", ""))):
+        raise ProtocolError("program_sha256 must be lowercase hexadecimal SHA-256")
+    driver = program.get("driver")
+    if not isinstance(driver, dict):
+        raise ProtocolError("driver must be an object")
+    _reject_unknown_keys(driver, {"id", "version"}, "driver")
+    if not IDENTIFIER.fullmatch(str(driver.get("id", ""))):
+        raise ProtocolError("driver requires a stable lowercase ID")
+    _bounded_string(driver.get("version"), "driver.version", pattern=PROGRAM_IDENTIFIER)
+    capability = program.get("capability")
+    if capability not in {"read", "mutation"}:
+        raise ProtocolError("capability must be read or mutation")
+    _validate_target(program.get("target"))
+    limits = _validate_limits(program.get("limits"))
+    slots = program.get("private_slots", [])
+    if not isinstance(slots, list):
+        raise ProtocolError("private_slots must be a unique array")
+    if len(slots) > 32 or not all(
+        isinstance(slot, str) and PRIVATE_FIELD.fullmatch(slot) for slot in slots
+    ):
+        raise ProtocolError("private slot names must be non-empty strings")
+    if len(slots) != len(set(slots)):
+        raise ProtocolError("private_slots must be a unique array")
+    raw_actions = program.get("actions")
+    if not isinstance(raw_actions, list) or not raw_actions:
+        raise ProtocolError("actions must be a non-empty array")
+    flat = list(iter_actions(raw_actions))
+    if len(flat) > limits["max_actions"]:
+        raise ProtocolError("program exceeds max_actions")
+    result = program.get("result")
+    if not isinstance(result, dict):
+        raise ProtocolError("result must be an object")
+    _reject_unknown_keys(result, {"public_fields", "private_fields"}, "result")
+    public = result.get("public_fields", [])
+    private = result.get("private_fields", [])
+    if (
+        not isinstance(public, list)
+        or not all(isinstance(item, str) for item in public)
+        or not set(public).issubset(PUBLIC_RESULT_FIELDS)
+    ):
+        raise ProtocolError("result requests an unsafe public field")
+    if len(public) != len(set(public)):
+        raise ProtocolError("result requests an unsafe public field")
+    if (
+        not isinstance(private, list)
+        or len(private) > 32
+        or not all(isinstance(item, str) and PRIVATE_FIELD.fullmatch(item) for item in private)
+    ):
+        raise ProtocolError("private result fields must be named strings")
+    if len(private) != len(set(private)):
+        raise ProtocolError("private result fields must be named strings")
+    slot_set = set(slots)
+    private_result_set = set(private)
+    for index, action in enumerate(flat):
+        _validate_action(action, slot_set, private_result_set, index)
+    operations = [action["op"] for action in flat]
+    boundary_count = operations.count("before_mutation")
+    if capability == "read" and (boundary_count or MUTATION_ONLY.intersection(operations)):
+        raise ProtocolError("read programs cannot contain mutation actions")
+    if capability == "mutation" and boundary_count != 1:
+        raise ProtocolError("mutation programs require exactly one mutation boundary")
+    extracted = {
+        action["private_result"]
+        for action in flat
+        if action["op"] in {"extract_ax", "extract_ax_collection"}
+    }
+    if extracted != private_result_set:
+        raise ProtocolError("private result declarations must exactly match extraction actions")
+    expected = program["program_sha256"]
+    if expected != canonical_program_sha256(program):
+        raise ProtocolError("program_sha256 does not match the canonical program")
+    return copy.deepcopy(program)

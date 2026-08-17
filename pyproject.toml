@@ -1,0 +1,8 @@
+[project]
+name = "llm-wiki-adapter-browser-execution"
+version = "0.0.1"
+requires-python = ">=3.9"
+description = "Private exact-target typed browser executor for targeted llm-wiki adapters"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
