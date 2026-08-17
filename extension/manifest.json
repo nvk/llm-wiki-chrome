@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LLM Wiki Browser Executor",
-  "description": "Runs exact-target typed browser programs produced by private targeted llm-wiki adapters.",
+  "description": "Gives local agents and private adapters bounded control of explicitly shared tabs.",
   "version": "0.0.1",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwP5zmG0i6Yq3uWHcVwtOnaEYnHs6z06ft6Gl2cz5PfX/3grYdy3+GMAeRwORiwSzim1pdh3LsAntUjVF6NiMDA9IiVeuVTNWVnrIqY5Hm8ecDG8RRraewKrM7UeGn2JGIF3mmndEAT1gqcNPswnslUxfEJ0QAACvE8U2oe5p3eKsIo/1maEsnRkTTeAHL8Y/SyEhe+8lvknLEgE3XnRJ1p8a0tyhMeVhUmkzXDBOfQmmaGocG2ChMq2doBKZfk8SnStFBTdY4Nny/rvpZYcux2Ia8raef6lVk4hGSlbyiGEX3oa4+Yzi6/CGzvPXVF3KDVdL7E7HAnVRqtul7mA+nwIDAQAB",
   "minimum_chrome_version": "120",

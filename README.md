@@ -4,11 +4,14 @@ Private, content-free execution substrate for targeted llm-wiki adapters. It
 provides one Chrome extension, one allowlisted Native Messaging host, a private
 Unix-socket relay, and a versioned typed-job contract.
 
-This is **not** a general browser agent. It does not accept natural-language
-tasks, arbitrary JavaScript, raw CDP methods, downloaded code, ambient browser
-access, or direct end-user routes. Provider-specific adapters still own routing,
-authentication, planning, selectors, journals, recovery, idempotency, and final
-read-back verification.
+This is **not** an autonomous natural-language browser agent. It exposes a small
+structured agent tool surface—shared tabs, accessibility snapshot, viewport
+screenshot, semantic click, private text insertion, key chord, and scroll—and
+compiles every call into the same exact-target typed protocol. It does not
+accept arbitrary JavaScript, raw CDP methods, downloaded code, ambient browser
+access, or page-authored actions. Provider-specific adapters still own stronger
+routing, authentication, journals, recovery, idempotency, and final read-back
+verification for consequential workflows.
 
 ## Click-to-collaborate flow
 
@@ -21,13 +24,13 @@ Same-origin navigation rotates the exact grant ID and URL so stale programs
 fail closed. A grant is revoked when the tab leaves its origin, closes, or the
 user stops that tab or the whole workspace in the side panel.
 
-Targeted adapters retrieve the private workspace through the native socket,
-match an expected URL or provider identifier, compile that one grant into an
-exact typed program, and fail closed if the grant or page has changed. The
-click authorizes exposing that page to bounded adapter reads; it
-does not authorize an arbitrary write. Mutation jobs still require the exact
-approved plan hash, the one-shot pre-mutation boundary, provider-specific
-preconditions, and independent read-back verification.
+The local agent and targeted adapters retrieve the private workspace through
+the native socket. A direct agent must first list the exact clicked grants and
+name one collaboration ID on every tool call. The server then compiles a fixed
+typed program and fails closed if the grant or page has changed. The click
+authorizes bounded reads and structured interaction on that exact tab; it never
+grants ambient browser access. Consequential provider workflows still use a
+targeted adapter for stronger preconditions and independent verification.
 
 Adapter code still has to be installed and trusted once. The collaboration
 grant replaces per-resource registration and provider OAuth only for workflows
@@ -54,6 +57,20 @@ if collaboration is None:
 result = executor.run(program, private_values=private_values)
 ```
 
+Codex and other MCP clients use the provider-neutral direct collaboration
+surface instead of constructing programs themselves:
+
+```sh
+.venv/bin/python adapter.py mcp-server
+```
+
+The MCP server publishes only seven fixed tools: `browser_tabs`,
+`browser_snapshot`, `browser_screenshot`, `browser_click`, `browser_type`,
+`browser_key`, and `browser_scroll`. It has no arbitrary program, CSS selector,
+script, or natural-language execution tool. Page content is returned only to
+the calling local agent for the active request and is not persisted by this
+repository or shown in the side panel.
+
 ## Development status
 
 The current development branch extends the `0.0.1` foundation with the first
@@ -70,6 +87,8 @@ bounded execution slice:
 - stable extension identity and exact native-host origin;
 - private local state, short socket paths, message limits, and one active job;
 - exact-tab activation and reviewed same-origin navigation;
+- a direct local MCP agent surface that makes an extension click immediately
+  discoverable and controllable by the agent without a provider OAuth grant;
 - allowlisted DOM and accessibility-tree reads, waits, and private extraction;
 - byte-capped private viewport JPEG capture with no executor-side persistence;
 - bounded viewport scrolling, deduplicating long-list collection, and private
@@ -109,8 +128,8 @@ possible.
 ## Architecture
 
 ```text
-targeted adapter
-  -> select one exact user-created grant from the private collaboration workspace
+local agent through fixed MCP tools OR a targeted provider adapter
+  -> select one exact user-created click grant from the private collaboration workspace
   -> deterministic typed program + exact approved plan hash
   -> BrowserExecutorClient over a private Unix socket
   -> allowlisted Native Messaging host
@@ -160,6 +179,25 @@ The self-test is content-free:
   --response /private/response.json
 ```
 
+For a local agent that cannot reach the default short `/tmp` socket, install
+the native host once with an explicit private short socket under an
+agent-accessible directory and register the MCP command with the same socket:
+
+```sh
+install -d -m 700 /private/agent/path/.browser
+.venv/bin/python adapter.py browser-install \
+  --native-socket /private/agent/path/.browser/s
+
+codex mcp add llm-wiki-browser \
+  --env LLM_WIKI_BROWSER_EXECUTOR_NATIVE_SOCKET=/private/agent/path/.browser/s \
+  -- .venv/bin/python adapter.py mcp-server
+```
+
+The paths above are placeholders; do not commit a workstation path. Restarting
+an agent session after registration makes the seven tools available. Chrome
+still exposes nothing until the user clicks the extension on a specific HTTPS
+tab, and stopping the collaboration revokes the grant.
+
 `browser-install` writes an exact-origin Native Messaging manifest and launcher.
 Use it only during an explicit installation or migration task. Loading the
 unpacked extension, changing a normal Chrome profile, and upgrading an installed
@@ -167,7 +205,7 @@ copy are not part of the test suite and require explicit user direction.
 
 ## Security model
 
-The executor validates a canonical program hash, approved plan hash, active
+The executor validates a canonical program hash, plan hash, active
 collaboration ID, fixed driver identity/version, exact target, capability, limits, action vocabulary,
 private slots, and result allowlist independently in Python and the extension.
 There are no persistent host permissions, `<all_urls>` access, or content
@@ -187,5 +225,7 @@ exposes raw diagnostic methods or request interception. A separate paired
 contexts, stacks, descriptions, previews, and object IDs and never allows
 evaluation, compilation, function calls, script execution, or property access.
 The executor is trusted local code, not an operating-system sandbox. Targeted
-adapters remain responsible for authorizing every provider effect and proving
-the provider's final state independently. See [SECURITY.md](SECURITY.md).
+adapters remain responsible for authorizing every consequential provider effect
+and proving the provider's final state independently. Direct mutation tools
+cross one internal one-shot boundary but deliberately do not claim provider
+transactional guarantees. See [SECURITY.md](SECURITY.md).

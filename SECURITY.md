@@ -4,19 +4,30 @@ This private repository contains code for a bounded local browser executor. It
 does not make browser automation safe by itself and is not an authorization
 boundary for provider effects.
 
-Every job must be bound to a user-created active-tab collaboration ID, approved
-plan hash, exact HTTPS target, explicit read or mutation capability, fixed
-driver version, bounded action count, and deadline. The targeted adapter remains responsible for provider authorization,
-pre-mutation state checks, durable pending journals, idempotency, and independent
-read-back verification.
+Every job must be bound to a user-created active-tab collaboration ID, plan
+hash, exact HTTPS target, explicit read or mutation capability, fixed driver
+version, bounded action count, and deadline. The direct MCP surface publishes
+only fixed structured operations and never accepts an arbitrary action program.
+For consequential provider workflows, the targeted adapter remains responsible
+for authorization, pre-mutation state checks, durable pending journals,
+idempotency, and independent read-back verification.
 
 The extension has no persistent host permissions. Each action click creates a
 temporary grant for that exact active tab through Chrome's `activeTab`
 permission. The bounded workspace contains at most 16 explicitly clicked tabs.
 The extension and private native relay keep grants in session memory, rotate a
 grant on same-origin navigation, revoke it on cross-origin navigation or close,
-and display only its hostname in the side panel. A local targeted adapter may
-retrieve exact targets only through the private user-owned socket.
+and display only its hostname in the side panel. A local agent or targeted
+adapter may retrieve exact targets only through the private user-owned socket.
+
+The direct agent surface requires a collaboration ID obtained from
+`browser_tabs` on every read or interaction. It supports only bounded AX
+snapshots, viewport screenshots, semantic AX clicks, private text insertion,
+allowlisted key chords, and viewport scrolling. It has no arbitrary program,
+CSS selector, script, URL-navigation, cookie, storage, download, upload, or
+credential tool. Direct click/type/key calls cross one internal mutation
+boundary; they are intentionally unsuitable for effects that require a
+provider-owned journal or transactional verification.
 
 The extension independently validates the signed program and private-slot
 shape. It accepts an HTTPS origin only when the program's collaboration ID,

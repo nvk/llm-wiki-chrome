@@ -217,6 +217,31 @@ class NativeMessagingTests(unittest.TestCase):
                 self.assertEqual(stat.S_IMODE(installed["wrapper_path"].stat().st_mode), 0o700)
                 self.assertEqual(connector_status(hosts)["installed"], True)
 
+    def test_installer_accepts_one_explicit_short_private_connector_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repository = base / "repository"
+            (repository / ".venv" / "bin").mkdir(parents=True)
+            os.symlink(sys.executable, repository / ".venv" / "bin" / "python")
+            (repository / "adapter.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+            (repository / "extension").mkdir()
+            (repository / "extension" / "manifest.json").write_text(
+                (ROOT / "extension" / "manifest.json").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            hosts = base / "hosts"
+            state = base / "state"
+            explicit = base / "private" / "s"
+            with mock.patch.dict(os.environ, {
+                "LLM_WIKI_BROWSER_EXECUTOR_STATE_DIR": str(state),
+            }, clear=False):
+                installed = install_native_host(repository, hosts, explicit)
+                resolved = explicit.resolve(strict=False)
+                self.assertEqual(installed["socket_path"], resolved)
+                self.assertEqual(stat.S_IMODE(resolved.parent.stat().st_mode), 0o700)
+                self.assertFalse(resolved.exists())
+                self.assertFalse(connector_status(hosts, resolved)["connected"])
+
     def test_long_state_path_uses_private_short_socket_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             long_root = Path(temporary) / ("x" * 100) / ("y" * 100)

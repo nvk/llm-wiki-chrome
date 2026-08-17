@@ -31,6 +31,7 @@ browser planner into this repository.
 | Navigate websites | Exact URL plus reviewed same-origin paths | Implemented in source; provider parity pending |
 | Terminal/Desktop bridge | Stable Native Messaging host and private Unix socket | Foundation complete |
 | Side-panel status | Content-free connector/job state only | Foundation complete |
+| Direct agent tool surface | MCP tools for clicked-tab list, snapshot, screenshot, semantic click/type/key, and scroll | Implemented in source; live-session gate pending |
 | Screenshots / visual context | Bounded private viewport JPEG, no automatic model upload | Implemented in source; consumer parity pending |
 | Scroll long pages and virtualized lists | Bounded typed scroll plus deduplicating AX collection on the exact tab | Implemented in source; X provider adoption pending |
 | Browser log entries | Paired, bounded exact-tab CDP Log window with private-only scalar results | Implemented in source; live-browser gate pending |
@@ -53,7 +54,10 @@ private exact-URL discovery, per-tab and whole-workspace revocation, content-fre
 job progress and cancellation, exact-tab activation, same-origin/path
 enforcement, typed DOM/AX queries, bounded waits and branches, private
 extraction, clicks, focus, key chords, private text insertion, and the governed
-mutation challenge. It retains the existing two reviewed production origins.
+mutation challenge. A local MCP server now exposes seven fixed structured agent
+tools, so clicking the extension is sufficient to make the exact tab visible
+and operable to a newly started configured agent session. It does not expose an
+arbitrary program or scripting tool.
 
 Deterministic tests cover signed-program validation, exact-origin tab queries,
 DOM fallback, private AX extraction, private insertion, one mutation challenge,

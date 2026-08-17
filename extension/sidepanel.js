@@ -64,7 +64,7 @@ function renderCollaborations(collaborations) {
     : `${count} explicitly shared ${count === 1 ? "tab" : "tabs"}`;
   collaborationDetail.textContent = count === 0
     ? "Open an HTTPS page and click the extension to collaborate."
-    : "Targeted adapters can use only the grants listed below.";
+    : "Your local agent can control only the grants listed below.";
   collaborationIndicator.className = `indicator ${count ? "connected" : "inactive"}`;
 }
 

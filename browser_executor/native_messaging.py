@@ -17,7 +17,14 @@ from typing import Any, BinaryIO
 from urllib.parse import urlsplit
 
 from .protocol import BROWSER_PROTOCOL
-from .storage import ensure_private_directory, ensure_socket_parent, native_socket_path, state_root, write_private_json
+from .storage import (
+    SAFE_UNIX_SOCKET_PATH_BYTES,
+    ensure_private_directory,
+    ensure_socket_parent,
+    native_socket_path,
+    state_root,
+    write_private_json,
+)
 
 NATIVE_HOST_NAME = "net.llmwiki.browser_execution"
 NATIVE_HOST_SCHEMA = "llm-wiki-browser-native-host/v1"
@@ -115,7 +122,11 @@ def chrome_native_host_dir() -> Path:
     raise NativeMessagingError("automatic native-host installation supports macOS and Linux")
 
 
-def install_native_host(root: Path | None = None, destination: Path | None = None) -> dict[str, Any]:
+def install_native_host(
+    root: Path | None = None,
+    destination: Path | None = None,
+    socket_path: Path | None = None,
+) -> dict[str, Any]:
     repository = (root or Path(__file__).resolve().parents[1]).resolve(strict=True)
     python = repository / ".venv" / "bin" / "python"
     entrypoint = repository / "adapter.py"
@@ -128,10 +139,12 @@ def install_native_host(root: Path | None = None, destination: Path | None = Non
     extension_id = extension_id_from_manifest(repository / "extension" / "manifest.json")
     durable_root = state_root()
     ensure_private_directory(durable_root)
-    socket_path = native_socket_path()
-    ensure_socket_parent(socket_path)
+    connector_path = (socket_path or native_socket_path()).expanduser().resolve(strict=False)
+    if len(os.fsencode(str(connector_path))) > SAFE_UNIX_SOCKET_PATH_BYTES:
+        raise NativeMessagingError("native connector socket path is too long")
+    ensure_socket_parent(connector_path)
     wrapper = durable_root / "native-host"
-    _install_launcher(wrapper, python, entrypoint, socket_path)
+    _install_launcher(wrapper, python, entrypoint, connector_path)
     manifest_path = install_dir / f"{NATIVE_HOST_NAME}.json"
     write_private_json(manifest_path, {
         "name": NATIVE_HOST_NAME,
@@ -149,11 +162,14 @@ def install_native_host(root: Path | None = None, destination: Path | None = Non
         "extension_id": extension_id,
         "manifest_path": manifest_path,
         "wrapper_path": wrapper,
-        "socket_path": socket_path,
+        "socket_path": connector_path,
     }
 
 
-def connector_status(destination: Path | None = None) -> dict[str, Any]:
+def connector_status(
+    destination: Path | None = None,
+    socket_path: Path | None = None,
+) -> dict[str, Any]:
     install_dir = (destination or chrome_native_host_dir()).resolve(strict=False)
     manifest_path = install_dir / f"{NATIVE_HOST_NAME}.json"
     installed = False
@@ -172,7 +188,7 @@ def connector_status(destination: Path | None = None) -> dict[str, Any]:
             installed = False
     return {
         "installed": installed,
-        "connected": native_socket_path().is_socket(),
+        "connected": (socket_path or native_socket_path()).expanduser().resolve(strict=False).is_socket(),
         "extension_id": extension_id_from_manifest(),
     }
 

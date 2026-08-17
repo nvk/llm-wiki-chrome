@@ -16,6 +16,9 @@ from browser_executor.native_messaging import (
     install_native_host,
     run_native_host,
 )
+from browser_executor.client import BrowserExecutorClient
+from browser_executor.collaboration import BrowserCollaborationController
+from browser_executor.mcp_server import run_mcp_server
 from browser_executor.protocol import BROWSER_PROTOCOL, canonical_program_sha256, validate_program
 
 ROOT = Path(__file__).resolve().parent
@@ -130,8 +133,15 @@ def main(argv: list[str] | None = None) -> int:
     run = sub.add_parser("execute")
     run.add_argument("--request", type=Path, required=True)
     run.add_argument("--response", type=Path, required=True)
-    sub.add_parser("browser-install")
-    sub.add_parser("browser-status")
+    install = sub.add_parser("browser-install")
+    install.add_argument("--native-socket", type=Path)
+    status = sub.add_parser("browser-status")
+    status.add_argument("--native-socket", type=Path)
+    sub.add_parser("browser-tabs")
+    snapshot = sub.add_parser("browser-snapshot")
+    snapshot.add_argument("--collaboration-id", required=True)
+    snapshot.add_argument("--max-items", type=int, default=400)
+    sub.add_parser("mcp-server")
     sub.add_parser("extension-path")
     native = sub.add_parser("native-host")
     native.add_argument("origin", nargs="?")
@@ -141,16 +151,29 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "execute":
         return execute(args.request, args.response)
     if args.command == "browser-install":
-        installed = install_native_host(ROOT)
+        installed = install_native_host(ROOT, socket_path=args.native_socket)
         print(json.dumps({
             "installed": True,
             "extension_id": installed["extension_id"],
             "extension_path": str(extension_root()),
+            "native_socket": str(installed["socket_path"]),
         }, sort_keys=True))
         return 0
     if args.command == "browser-status":
-        print(json.dumps(connector_status(), sort_keys=True))
+        print(json.dumps(connector_status(socket_path=args.native_socket), sort_keys=True))
         return 0
+    if args.command == "browser-tabs":
+        print(json.dumps({"tabs": BrowserExecutorClient().collaborations()}, sort_keys=True))
+        return 0
+    if args.command == "browser-snapshot":
+        value = BrowserCollaborationController().snapshot(
+            args.collaboration_id,
+            max_items=args.max_items,
+        )
+        print(json.dumps(value, sort_keys=True, ensure_ascii=False))
+        return 0
+    if args.command == "mcp-server":
+        return run_mcp_server()
     if args.command == "extension-path":
         print(extension_root())
         return 0

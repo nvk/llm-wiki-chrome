@@ -104,6 +104,15 @@ validateProgram(program).then(() => {
         self.assertIn("Stop all", html)
         self.assertIn("Cancel job", html)
 
+    def test_direct_agent_interface_exposes_only_fixed_structured_tools(self) -> None:
+        source = (ROOT / "browser_executor" / "mcp_server.py").read_text(encoding="utf-8")
+        self.assertIn('"browser_tabs"', source)
+        self.assertIn('"browser_snapshot"', source)
+        self.assertIn('"browser_click"', source)
+        self.assertNotIn('"browser_execute"', source)
+        self.assertNotIn('"javascript"', source.lower())
+        self.assertNotIn('"natural_language"', source.lower())
+
     def test_describe_matches_manifest(self) -> None:
         manifest = json.loads((ROOT / ".llm-wiki-adapter.json").read_text(encoding="utf-8"))
         completed = subprocess.run(

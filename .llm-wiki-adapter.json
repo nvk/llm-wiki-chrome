@@ -10,6 +10,7 @@
     "browser-executor-native-messaging",
     "browser-executor-active-tab-collaboration",
     "browser-executor-multi-tab-collaboration-workspace",
+    "browser-executor-direct-agent-mcp",
     "browser-executor-typed-dom-ax-execution",
     "browser-executor-private-ax-revision-lock",
     "browser-executor-governed-mutation-boundary",
