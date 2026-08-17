@@ -163,6 +163,58 @@ Public llm-wiki may see this repository's route-free `self-test` adapter
 manifest, but it never routes an external edit or research request directly to
 the executor.
 
+## Packaging and installation
+
+The installable product is split at Chrome's security boundary:
+
+- **`llm-wiki-chrome` native companion:** the Python client, fixed MCP server,
+  Native Messaging host, installer, diagnostics, and packaged extension assets;
+- **LLM Wiki for Chrome:** the MV3 extension ZIP, intended for a private Chrome
+  Web Store listing after explicit publication approval. Loading the unpacked
+  path remains the development workflow.
+
+The development-only Homebrew formula is available from `nvk/tap` as a HEAD
+build. It is deliberately not a stable release:
+
+```sh
+brew install --HEAD nvk/tap/llm-wiki-chrome
+llm-wiki-chrome install
+llm-wiki-chrome doctor
+```
+
+`install` writes the exact-origin Native Messaging registration. It does not
+install a daemon: Chrome starts the host on demand and communicates with it over
+standard input/output. Each Chrome host creates a private per-process socket
+under the deterministic `/tmp/llm-wiki-chrome-<uid>/` runtime directory. The
+CLI, MCP server, and targeted adapters discover those sockets automatically.
+There is no normal socket argument, port, pairing code, or environment variable.
+The existing environment override remains only for exceptional sandboxed or
+development setups.
+
+For an unpacked development installation, ask the package for the exact path:
+
+```sh
+llm-wiki-chrome extension-path
+```
+
+Load that directory from `chrome://extensions` and run `llm-wiki-chrome doctor`.
+`healthy: true` confirms the package and Native Messaging registration;
+`connected: true` appears while Chrome has the extension's native port open.
+Uninstall only the native companion registration with:
+
+```sh
+llm-wiki-chrome uninstall
+```
+
+Build a deterministic, content-free Chrome Web Store ZIP without publishing it:
+
+```sh
+python3 scripts/package_extension.py
+```
+
+No release, tag, store upload, or installed upgrade is performed by these build
+commands.
+
 ## Development
 
 ```sh
@@ -200,24 +252,21 @@ The self-test is content-free:
   --response /private/response.json
 ```
 
-For a local agent that cannot reach the default short `/tmp` socket, install
-the native host once with an explicit private short socket under an
-agent-accessible directory and register the MCP command with the same socket:
+Install the source checkout's native host once and register its MCP command:
 
 ```sh
-install -d -m 700 /private/agent/path/.browser
-.venv/bin/python adapter.py browser-install \
-  --native-socket /private/agent/path/.browser/s
+.venv/bin/python adapter.py install
 
 codex mcp add llm-wiki-browser \
-  --env LLM_WIKI_BROWSER_EXECUTOR_NATIVE_SOCKET=/private/agent/path/.browser/s \
   -- .venv/bin/python adapter.py mcp-server
 ```
 
-The paths above are placeholders; do not commit a workstation path. Restarting
-an agent session after registration makes the seven tools available. Chrome
-still exposes nothing until the user clicks the extension on a specific HTTPS
-tab, and stopping the collaboration revokes the grant.
+Restarting an agent session after registration makes the eight tools available.
+Chrome still exposes nothing until the user clicks the extension on a specific
+HTTPS tab, and stopping the collaboration revokes the grant. An exceptional
+runtime that cannot access the private default `/tmp` directory may set
+`LLM_WIKI_BROWSER_EXECUTOR_NATIVE_SOCKET` consistently for both commands, but
+that is not part of the packaged user flow.
 
 `browser-install` writes an exact-origin Native Messaging manifest and launcher.
 Use it only during an explicit installation or migration task. Loading the

@@ -4,12 +4,32 @@ version = "0.0.1"
 requires-python = ">=3.9"
 description = "Private exact-target typed browser executor for targeted llm-wiki adapters"
 
+[project.scripts]
+llm-wiki-chrome = "browser_executor.cli:main"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["browser_executor"]
+
+[tool.setuptools.data-files]
+"share/llm-wiki-chrome" = [".llm-wiki-adapter.json"]
+"share/llm-wiki-chrome/extension" = [
+  "extension/collaboration-marker.js",
+  "extension/executor.mjs",
+  "extension/manifest.json",
+  "extension/protocol.mjs",
+  "extension/service-worker.js",
+  "extension/sidepanel.css",
+  "extension/sidepanel.html",
+  "extension/sidepanel.js",
+]
+"share/llm-wiki-chrome/schemas" = [
+  "schemas/job-v1.schema.json",
+  "schemas/result-v1.schema.json",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

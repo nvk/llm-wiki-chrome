@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import stat
@@ -25,15 +24,8 @@ def native_socket_path() -> Path:
     override = os.environ.get("LLM_WIKI_BROWSER_EXECUTOR_NATIVE_SOCKET")
     if override:
         return Path(override).expanduser().resolve(strict=False)
-    candidate = state_root() / "native-bridge.sock"
-    if (
-        len(os.fsencode(str(candidate))) + NATIVE_SOCKET_INSTANCE_SUFFIX_BYTES
-        <= SAFE_UNIX_SOCKET_PATH_BYTES
-    ):
-        return candidate
-    digest = hashlib.sha256(str(candidate).encode("utf-8")).hexdigest()[:12]
     user_id = getattr(os, "getuid", lambda: 0)()
-    return Path("/tmp") / f"lwb-{user_id}-{digest}" / "s"
+    return Path("/tmp") / f"llm-wiki-chrome-{user_id}" / "s"
 
 
 def native_socket_candidates(base_path: Path) -> list[Path]:

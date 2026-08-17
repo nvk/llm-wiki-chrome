@@ -24,6 +24,7 @@ from browser_executor.native_messaging import (
     extension_id_from_manifest,
     install_native_host,
     read_native_message,
+    uninstall_native_host,
     write_native_message,
 )
 from browser_executor.protocol import BROWSER_PROTOCOL
@@ -281,15 +282,62 @@ class NativeMessagingTests(unittest.TestCase):
                 self.assertFalse(resolved.exists())
                 self.assertFalse(connector_status(hosts, resolved)["connected"])
 
-    def test_long_state_path_uses_private_short_socket_path(self) -> None:
+    def test_default_socket_is_deterministic_short_and_user_scoped(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             long_root = Path(temporary) / ("x" * 100) / ("y" * 100)
             with mock.patch.dict(os.environ, {
                 "LLM_WIKI_BROWSER_EXECUTOR_STATE_DIR": str(long_root),
-            }, clear=False):
+            }, clear=True):
                 path = native_socket_path()
                 self.assertLessEqual(len(os.fsencode(str(path))), SAFE_UNIX_SOCKET_PATH_BYTES)
                 self.assertEqual(path.parent.parent, Path("/tmp"))
+                self.assertEqual(path.name, "s")
+                self.assertRegex(path.parent.name, r"^llm-wiki-chrome-\d+$")
+
+    def test_packaged_command_install_and_uninstall_are_exact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            command = base / "opt" / "bin" / "llm-wiki-chrome"
+            command.parent.mkdir(parents=True)
+            command.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            command.chmod(0o755)
+            hosts = base / "hosts"
+            state = base / "state"
+            socket_path = base / "private" / "s"
+            with mock.patch.dict(os.environ, {
+                "LLM_WIKI_BROWSER_EXECUTOR_STATE_DIR": str(state),
+            }, clear=False):
+                installed = install_native_host(
+                    ROOT,
+                    hosts,
+                    socket_path,
+                    command_path=command,
+                )
+                self.assertTrue(installed["wrapper_path"].is_file())
+                self.assertTrue(connector_status(hosts, socket_path)["installed"])
+                metadata = json.loads(
+                    (state / "native-host-installation.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(metadata["socket_path"], str(socket_path.resolve(strict=False)))
+                result = uninstall_native_host(hosts)
+                self.assertTrue(result["uninstalled"])
+                self.assertFalse(installed["manifest_path"].exists())
+                self.assertFalse(installed["wrapper_path"].exists())
+                self.assertFalse((state / "native-host-installation.json").exists())
+
+    def test_uninstaller_refuses_an_unowned_launcher(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            state = base / "state"
+            state.mkdir()
+            wrapper = state / "native-host"
+            wrapper.write_text("synthetic foreign file\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {
+                "LLM_WIKI_BROWSER_EXECUTOR_STATE_DIR": str(state),
+            }, clear=False):
+                with self.assertRaisesRegex(NativeMessagingError, "unowned"):
+                    uninstall_native_host(base / "hosts")
+            self.assertTrue(wrapper.exists())
 
     def test_socket_owner_modes_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import socket
 import struct
 import subprocess
@@ -41,7 +42,19 @@ class NativeMessagingError(RuntimeError):
 
 
 def extension_root() -> Path:
-    return Path(__file__).resolve().parents[1] / "extension"
+    override = os.environ.get("LLM_WIKI_CHROME_EXTENSION_DIR")
+    if override:
+        candidate = Path(override).expanduser().absolute()
+        if (candidate / "manifest.json").is_file():
+            return candidate
+        raise NativeMessagingError("configured Chrome extension directory is invalid")
+    source = Path(__file__).resolve().parents[1] / "extension"
+    if (source / "manifest.json").is_file():
+        return source
+    installed = Path(sys.prefix) / "share" / "llm-wiki-chrome" / "extension"
+    if (installed / "manifest.json").is_file():
+        return installed
+    raise NativeMessagingError("packaged Chrome extension assets are missing")
 
 
 def _c_bytes(name: str, value: Path) -> str:
@@ -102,6 +115,76 @@ int main(int argc, char **argv) {
         wrapper.chmod(0o700)
 
 
+def _install_command_launcher(wrapper: Path, command: Path, socket_path: Path) -> None:
+    """Install a native host that calls one stable packaged CLI command."""
+    if not command.is_absolute() or not command.is_file() or not os.access(command, os.X_OK):
+        raise NativeMessagingError("packaged native-host command is missing or not executable")
+    if sys.platform != "darwin":
+        script = (
+            "#!/bin/sh\n"
+            f"export LLM_WIKI_BROWSER_EXECUTOR_NATIVE_SOCKET={shlex.quote(str(socket_path))}\n"
+            f"exec {shlex.quote(str(command))} native-host \"$@\"\n"
+        )
+        wrapper.write_text(script, encoding="utf-8")
+        wrapper.chmod(0o700)
+        return
+    compiler = Path("/usr/bin/clang")
+    if not compiler.is_file() or not os.access(compiler, os.X_OK):
+        raise NativeMessagingError("macOS native-host installation requires /usr/bin/clang")
+    source = (
+        "#include <stdlib.h>\n#include <unistd.h>\n#include <stdio.h>\n"
+        + _c_bytes("COMMAND_PATH", command)
+        + _c_bytes("SOCKET_PATH", socket_path)
+        + r'''
+int main(int argc, char **argv) {
+  if (setenv("LLM_WIKI_BROWSER_EXECUTOR_NATIVE_SOCKET", SOCKET_PATH, 1) != 0) return 126;
+  char **args = calloc((size_t)argc + 3, sizeof(char *));
+  if (!args) return 126;
+  args[0] = (char *)COMMAND_PATH;
+  args[1] = "native-host";
+  for (int i = 1; i < argc; i++) args[i + 1] = argv[i];
+  args[argc + 1] = NULL;
+  execv(COMMAND_PATH, args);
+  perror("execv");
+  return 127;
+}
+'''
+    )
+    with tempfile.TemporaryDirectory(prefix="native-host-build-", dir=wrapper.parent) as build:
+        build_root = Path(build)
+        source_path = build_root / "launcher.c"
+        output_path = build_root / "native-host"
+        source_path.write_text(source, encoding="utf-8")
+        result = subprocess.run(
+            [str(compiler), "-Os", "-o", str(output_path), str(source_path)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode != 0 or not output_path.is_file():
+            raise NativeMessagingError("could not compile the macOS native-host launcher")
+        output_path.chmod(0o700)
+        os.replace(output_path, wrapper)
+        wrapper.chmod(0o700)
+
+
+def installed_cli_path(name: str = "llm-wiki-chrome") -> Path | None:
+    """Return the invoked/PATH CLI without resolving an upgrade-stable symlink."""
+    configured = os.environ.get("LLM_WIKI_CHROME_COMMAND")
+    raw = configured or (sys.argv[0] if Path(sys.argv[0]).name == name else None)
+    if raw and not Path(raw).is_absolute():
+        raw = shutil.which(raw)
+    if not raw:
+        raw = shutil.which(name)
+    if not raw:
+        return None
+    candidate = Path(raw).expanduser().absolute()
+    if candidate.is_file() and os.access(candidate, os.X_OK):
+        return candidate
+    return None
+
+
 def extension_id_from_manifest(manifest_path: Path | None = None) -> str:
     path = manifest_path or (extension_root() / "manifest.json")
     try:
@@ -128,17 +211,22 @@ def install_native_host(
     root: Path | None = None,
     destination: Path | None = None,
     socket_path: Path | None = None,
+    command_path: Path | None = None,
 ) -> dict[str, Any]:
-    repository = (root or Path(__file__).resolve().parents[1]).resolve(strict=True)
-    python = repository / ".venv" / "bin" / "python"
-    entrypoint = repository / "adapter.py"
-    if not python.is_file() or not os.access(python, os.X_OK):
-        raise NativeMessagingError("adapter virtual environment is missing or not executable")
-    if not entrypoint.is_file():
-        raise NativeMessagingError("adapter entrypoint is missing")
+    repository = (root or Path(__file__).resolve().parents[1]).resolve(strict=False)
+    source_extension = repository / "extension"
+    extension = source_extension if (source_extension / "manifest.json").is_file() else extension_root()
+    command = command_path.expanduser().absolute() if command_path is not None else None
+    if command is None:
+        python = repository / ".venv" / "bin" / "python"
+        entrypoint = repository / "adapter.py"
+        if not python.is_file() or not os.access(python, os.X_OK):
+            raise NativeMessagingError("adapter virtual environment is missing or not executable")
+        if not entrypoint.is_file():
+            raise NativeMessagingError("adapter entrypoint is missing")
     install_dir = (destination or chrome_native_host_dir()).resolve(strict=False)
     ensure_private_directory(install_dir)
-    extension_id = extension_id_from_manifest(repository / "extension" / "manifest.json")
+    extension_id = extension_id_from_manifest(extension / "manifest.json")
     durable_root = state_root()
     ensure_private_directory(durable_root)
     connector_path = (socket_path or native_socket_path()).expanduser().resolve(strict=False)
@@ -149,7 +237,10 @@ def install_native_host(
         raise NativeMessagingError("native connector socket path is too long")
     ensure_socket_parent(connector_path)
     wrapper = durable_root / "native-host"
-    _install_launcher(wrapper, python, entrypoint, connector_path)
+    if command is None:
+        _install_launcher(wrapper, python, entrypoint, connector_path)
+    else:
+        _install_command_launcher(wrapper, command, connector_path)
     manifest_path = install_dir / f"{NATIVE_HOST_NAME}.json"
     write_private_json(manifest_path, {
         "name": NATIVE_HOST_NAME,
@@ -162,6 +253,7 @@ def install_native_host(
         "schema": NATIVE_HOST_SCHEMA,
         "extension_id": extension_id,
         "manifest_path": str(manifest_path),
+        "socket_path": str(connector_path),
     })
     return {
         "extension_id": extension_id,
@@ -169,6 +261,55 @@ def install_native_host(
         "wrapper_path": wrapper,
         "socket_path": connector_path,
     }
+
+
+def uninstall_native_host(destination: Path | None = None) -> dict[str, Any]:
+    """Remove only this package's exact manifest and durable launcher."""
+    install_dir = (destination or chrome_native_host_dir()).resolve(strict=False)
+    manifest_path = install_dir / f"{NATIVE_HOST_NAME}.json"
+    durable_root = state_root()
+    wrapper = durable_root / "native-host"
+    metadata_path = durable_root / "native-host-installation.json"
+    owned_installation = False
+    if manifest_path.is_file():
+        try:
+            value = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise NativeMessagingError("refusing to remove an unreadable native-host manifest") from exc
+        expected_origin = f"{EXTENSION_ORIGIN_PREFIX}{extension_id_from_manifest()}/"
+        if (
+            value.get("name") != NATIVE_HOST_NAME
+            or value.get("type") != "stdio"
+            or value.get("allowed_origins") != [expected_origin]
+            or Path(str(value.get("path", ""))) != wrapper
+        ):
+            raise NativeMessagingError("refusing to remove a native-host manifest not owned by this package")
+        owned_installation = True
+    if metadata_path.is_file():
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise NativeMessagingError("refusing to remove unreadable installation metadata") from exc
+        if (
+            metadata.get("schema") != NATIVE_HOST_SCHEMA
+            or metadata.get("extension_id") != extension_id_from_manifest()
+            or metadata.get("manifest_path") != str(manifest_path)
+        ):
+            raise NativeMessagingError("refusing to remove installation metadata not owned by this package")
+        owned_installation = True
+    if wrapper.is_file() and not owned_installation:
+        raise NativeMessagingError("refusing to remove an unowned native-host launcher")
+    removed: list[str] = []
+    if manifest_path.is_file():
+        manifest_path.unlink()
+        removed.append("native-host-manifest")
+    if metadata_path.is_file():
+        metadata_path.unlink()
+        removed.append("installation-metadata")
+    if wrapper.is_file():
+        wrapper.unlink()
+        removed.append("native-host-launcher")
+    return {"uninstalled": True, "removed": removed}
 
 
 def connector_status(
