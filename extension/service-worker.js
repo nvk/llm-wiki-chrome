@@ -133,7 +133,7 @@ async function persistWorkspace(workspace, removed = []) {
     if (chrome.action?.setTitle) {
       await chrome.action.setTitle({
         tabId: value.tab_id,
-        title: "LLM Wiki Browser Executor",
+        title: "LLM Wiki for Chrome",
       }).catch(() => {});
     }
   }

@@ -17,6 +17,8 @@ verification for consequential workflows.
 
 The extension does not need persistent site access or per-page Chrome host
 registration. The user opens an HTTPS page and clicks the extension action.
+Its Chrome-facing name is **LLM Wiki for Chrome**; browser-executor terminology
+is kept only for the private protocol and implementation.
 That Chrome user gesture creates a fresh ephemeral collaboration grant bound to
 the exact tab, URL, and origin. Clicking additional tabs builds an explicit
 workspace of up to 16 grants; the executor never enumerates unrelated tabs.
