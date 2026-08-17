@@ -59,6 +59,7 @@ class FakeChrome {
     this.commands = [];
     this.clicks = 0;
     this.scrolls = 0;
+    this.frameTree = false;
 
     this.tabs = {
       update: async (tabId, changes) => {
@@ -94,11 +95,11 @@ class FakeChrome {
         assert.equal(tabId, this.tab.id);
         this.attached = false;
       },
-      sendCommand: async ({tabId}, method, parameters) => {
+      sendCommand: async ({tabId, sessionId}, method, parameters) => {
         assert.equal(tabId, this.tab.id);
         assert.equal(this.attached, true);
         this.commands.push({method, parameters: structuredClone(parameters)});
-        return this.command(method, parameters);
+        return this.command(method, parameters, sessionId);
       },
     };
   }
@@ -138,10 +139,17 @@ class FakeChrome {
     ];
   }
 
-  command(method, parameters) {
+  command(method, parameters, sessionId = null) {
     if (["DOM.enable", "DOM.disable", "Accessibility.enable", "Accessibility.disable",
       "Page.enable", "Page.disable", "Log.disable", "Network.disable", "Runtime.disable",
       "DOM.scrollIntoViewIfNeeded"].includes(method)) return {};
+    if (method === "Target.setAutoAttach") {
+      if (this.frameTree) this.debugger.onEvent.emit(
+        {tabId: this.tab.id}, "Target.attachedToTarget",
+        {sessionId: "synthetic-frame", targetInfo: {type: "iframe"}},
+      );
+      return {};
+    }
     if (method === "Log.enable") {
       this.debugger.onEvent.emit(
         {tabId: this.tab.id},
@@ -229,7 +237,14 @@ class FakeChrome {
       );
       return {};
     }
-    if (method === "Accessibility.getFullAXTree") return {nodes: this.tree()};
+    if (method === "Accessibility.getFullAXTree") {
+      if (sessionId === "synthetic-frame") return {nodes: [
+        axNode({id: "frame-root", role: "document", name: "Synthetic frame"}),
+        axNode({id: "frame-control", parentId: "frame-root", role: "button",
+          name: "Frame control", backendDOMNodeId: 77}),
+      ]};
+      return {nodes: this.tree()};
+    }
     if (method === "DOM.getDocument") return {root: {nodeId: 1}};
     if (method === "DOM.querySelector") {
       return {nodeId: parameters.selector.includes("synthetic-space-attendee-list") ? 42 : 0};
@@ -253,8 +268,14 @@ class FakeChrome {
     if (method === "Input.dispatchKeyEvent") return {};
     if (method === "Page.captureScreenshot") {
       assert.equal(parameters.format, "jpeg");
-      assert.equal(parameters.captureBeyondViewport, false);
       return {data: btoa("synthetic-jpeg-bytes")};
+    }
+    if (method === "Page.getLayoutMetrics") {
+      return {cssContentSize: {width: 800, height: 1200}};
+    }
+    if (["Performance.enable", "Performance.disable"].includes(method)) return {};
+    if (method === "Performance.getMetrics") {
+      return {metrics: [{name: "TaskDuration", value: 1.25}]};
     }
     throw new Error(`Unexpected synthetic CDP method: ${method}`);
   }
@@ -336,6 +357,41 @@ async function screenshotProgram() {
       {op: "detach_debugger"},
     ],
     result: {public_fields: ["status", "private_result_count"], private_fields: ["page.viewport"]},
+  };
+  program.program_sha256 = await canonicalProgramHash(program);
+  return validateProgram(program);
+}
+
+async function advancedVisualProgram() {
+  const program = {
+    protocol: "llm-wiki-browser-executor/v1",
+    program_id: "synthetic-advanced-visual-v1",
+    program_sha256: "0".repeat(64),
+    plan_sha256: "9".repeat(64),
+    driver: {id: "synthetic-driver", version: "0.0.1"},
+    capability: "read",
+    target: {
+      url: "https://x.com/i/spaces/SYNTHETIC_SPACE", origin: "https://x.com",
+      path_prefixes: ["/i/spaces/SYNTHETIC_SPACE"], collaboration_id: "d".repeat(64),
+    },
+    limits: {timeout_ms: 5000, max_actions: 12, max_repeat: 2},
+    private_slots: [],
+    actions: [
+      {op: "open_or_focus_exact_url"}, {op: "attach_debugger"},
+      {op: "hover_ax", locator: {role: "dialog", name: "People listeners", unique: true}},
+      {op: "extract_ax_geometry", locator: {role: "dialog", name: "People listeners"},
+       private_result: "page.geometry", max_items: 5},
+      {op: "capture_region_private", private_result: "page.region", quality: 60,
+       max_bytes: 16384, x: 0, y: 0, width: 100, height: 100},
+      {op: "capture_full_page_private", private_result: "page.full", quality: 60,
+       max_bytes: 16384, max_width: 2000, max_height: 2000},
+      {op: "capture_performance_private", private_result: "page.performance", max_metrics: 10},
+      {op: "extract_ax", locator: {role: "button", name: "Frame control", unique: true},
+       fields: ["role", "name"], private_result: "page.frame", max_items: 1},
+      {op: "detach_debugger"},
+    ],
+    result: {public_fields: ["status", "private_result_count"],
+      private_fields: ["page.geometry", "page.region", "page.full", "page.performance", "page.frame"]},
   };
   program.program_sha256 = await canonicalProgramHash(program);
   return validateProgram(program);
@@ -591,6 +647,21 @@ async function testPrivateViewportCapture() {
     data_base64: btoa("synthetic-jpeg-bytes"),
   });
   assert.equal(fake.attached, false);
+}
+
+async function testAdvancedVisualGroundingAndPerformance() {
+  const program = await advancedVisualProgram();
+  const fake = new FakeChrome(program.target.url);
+  fake.frameTree = true;
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac", targetTabId: fake.tab.id});
+  const result = await executor.run(program, {}, async () => false);
+  assert.equal(result.private["page.geometry"][0].width, 20);
+  assert.equal(result.private["page.region"].mime_type, "image/jpeg");
+  assert.equal(result.private["page.full"].mime_type, "image/jpeg");
+  assert.equal(result.private["page.performance"][0].name, "TaskDuration");
+  assert.equal(result.private["page.frame"][0].name, "Frame control");
+  assert.ok(fake.commands.some((entry) =>
+    entry.method === "Input.dispatchMouseEvent" && entry.parameters.type === "mouseMoved"));
 }
 
 async function testViewportScrollAndPrivateLinkMetadata() {
@@ -857,6 +928,7 @@ await testReadExecutionAndPrivateExtraction();
 await testExecutionRequiresAnExplicitSharedTabId();
 await testMutationBoundaryAndPrivateInsertion();
 await testPrivateViewportCapture();
+await testAdvancedVisualGroundingAndPerformance();
 await testViewportScrollAndPrivateLinkMetadata();
 await testScrollingCollectionDeduplicatesAndStopsAtBound();
 await testPrivateBrowserLogCaptureIsBoundedAndCleanedUp();

@@ -9,6 +9,8 @@ const NATIVE_HOST = "net.llmwiki.browser_execution";
 const CONNECTOR_STATE_KEY = "nativeConnectorState";
 const COLLABORATION_STATE_KEY = "collaborationWorkspace";
 const JOB_STATE_KEY = "activeJobState";
+const AUTH_STATE_KEY = "authorizationState";
+const TAB_GROUP_KEY = "workspaceTabGroup";
 const MAX_COLLABORATIONS = 16;
 const JOB_ID = /^[a-f0-9]{36}$/u;
 const COLLABORATION_ID = /^[a-f0-9]{64}$/u;
@@ -18,6 +20,17 @@ let nativePort = null;
 let reconnectTimer = null;
 let activeJob = null;
 let workspaceSerial = Promise.resolve();
+const AUTH_MODES = new Set(["manual", "plan", "automatic"]);
+const PROTECTED_OPERATIONS = new Set([
+  "set_private_files", "handle_dialog", "trigger_credential_broker",
+]);
+
+function hasProtectedOperation(actions) {
+  return Array.isArray(actions) && actions.some((action) =>
+    PROTECTED_OPERATIONS.has(action?.op) ||
+    (action?.op === "first_success" && action.branches.some(hasProtectedOperation))
+  );
+}
 
 function hasExactKeys(value, expected) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -34,6 +47,36 @@ async function setConnectorState(state, detail = "") {
 
 async function setJobState(value) {
   await chrome.storage.session.set({[JOB_STATE_KEY]: value});
+}
+
+async function authorizationState() {
+  const stored = await chrome.storage.session.get(AUTH_STATE_KEY);
+  const value = stored[AUTH_STATE_KEY];
+  if (value && AUTH_MODES.has(value.mode) && Number.isInteger(value.decisions) && value.decisions >= 0) {
+    return value;
+  }
+  const initial = {mode: "plan", decisions: 0, last_decision: null};
+  await chrome.storage.session.set({[AUTH_STATE_KEY]: initial});
+  return initial;
+}
+
+async function recordDecision(decision) {
+  const state = await authorizationState();
+  const next = {mode: state.mode, decisions: state.decisions + 1, last_decision: decision};
+  await chrome.storage.session.set({[AUTH_STATE_KEY]: next});
+  return next;
+}
+
+async function groupWorkspaceTabs(workspace) {
+  if (!chrome.tabs?.group || !chrome.tabGroups?.update || !workspace.collaborations.length) return;
+  const tabIds = workspace.collaborations.map((value) => value.tab_id);
+  try {
+    const groupId = await chrome.tabs.group({tabIds});
+    await chrome.tabGroups.update(groupId, {title: "LLM Wiki", color: "green", collapsed: false});
+    await chrome.storage.session.set({[TAB_GROUP_KEY]: groupId});
+  } catch (_error) {
+    // Grouping is presentation only; exact grants remain the authority boundary.
+  }
 }
 
 function collaborationId() {
@@ -148,6 +191,7 @@ async function persistWorkspace(workspace, removed = []) {
       }).catch(() => {});
     }
   }
+  await groupWorkspaceTabs(workspace);
   await publishWorkspace(workspace).catch(() => {});
 }
 
@@ -374,14 +418,34 @@ function handleMutationAuthorization(message, port) {
     cancelActiveJob(port);
     return;
   }
-  setConnectorState("busy", "A bounded browser job is running.").catch(() => {});
-  setJobState({
-    state: "running",
-    action_count: job.executor?.actionCount || 0,
-    max_actions: job.executor?.program?.limits?.max_actions || 0,
-    mutation_started: job.executor?.mutationStarted === true,
-  }).catch(() => {});
-  finishBoundary(job, message.authorized);
+  if (message.authorized !== true) {
+    recordDecision("denied-by-adapter").catch(() => {});
+    finishBoundary(job, false);
+    return;
+  }
+  authorizationState().then((state) => {
+    const protectedAction = hasProtectedOperation(job.executor?.program?.actions);
+    if (state.mode === "manual" || protectedAction) {
+      job.externalAuthorized = true;
+      setConnectorState("authorizing", "Waiting for local protected-action confirmation.").catch(() => {});
+      setJobState({
+        state: "awaiting-user",
+        action_count: job.executor?.actionCount || 0,
+        max_actions: job.executor?.program?.limits?.max_actions || 0,
+        mutation_started: false,
+      }).catch(() => {});
+      return;
+    }
+    recordDecision(state.mode === "automatic" ? "automatic" : "plan").catch(() => {});
+    setConnectorState("busy", "A bounded browser job is running.").catch(() => {});
+    setJobState({
+      state: "running",
+      action_count: job.executor?.actionCount || 0,
+      max_actions: job.executor?.program?.limits?.max_actions || 0,
+      mutation_started: job.executor?.mutationStarted === true,
+    }).catch(() => {});
+    finishBoundary(job, true);
+  }).catch(() => finishBoundary(job, false));
 }
 
 async function executeJob(message, port) {
@@ -468,6 +532,13 @@ async function executeJob(message, port) {
       () => requestMutation(job),
     );
     if (job.cancelled) throw new ExecutionError("job-cancelled");
+    if (executor.createdTab && Number.isInteger(executor.tabId)) {
+      const created = await chrome.tabs.get(executor.tabId);
+      if (await startCollaboration(created) !== "connected") {
+        throw new ExecutionError("created-tab-grant-failed");
+      }
+    }
+    if (executor.closingTarget) await checkedWorkspace();
     sendThrough(port, {
       type: "result",
       job_id: jobId,
@@ -475,6 +546,12 @@ async function executeJob(message, port) {
       public: filterFields(result.public, program.result.public_fields),
       private: filterFields(result.private, program.result.private_fields),
     });
+    if (chrome.notifications?.create) {
+      chrome.notifications.create(`llm-wiki-${jobId}`, {
+        type: "basic", iconUrl: "icon-128.png", title: "LLM Wiki for Chrome",
+        message: "The bounded browser job completed.",
+      }).catch(() => {});
+    }
   } catch (error) {
     try {
       sendThrough(port, {
@@ -487,6 +564,12 @@ async function executeJob(message, port) {
       });
     } catch (_sendError) {
       // A disconnected native port has already cancelled the job.
+    }
+    if (chrome.notifications?.create) {
+      chrome.notifications.create(`llm-wiki-${jobId}`, {
+        type: "basic", iconUrl: "icon-128.png", title: "LLM Wiki for Chrome",
+        message: "The bounded browser job needs attention.",
+      }).catch(() => {});
     }
   } finally {
     finishBoundary(job, false);
@@ -543,7 +626,8 @@ chrome.action.onClicked.addListener((tab) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (typeof changeInfo.url === "string" && activeJob?.tabId === tabId) cancelActiveJob();
+  if (typeof changeInfo.url === "string" && activeJob?.tabId === tabId &&
+      activeJob?.executor?.expectedUrl !== changeInfo.url) cancelActiveJob();
   if (typeof changeInfo.url !== "string" && changeInfo.status !== "complete") return;
   checkedWorkspace().then((workspace) => {
     if (changeInfo.status !== "complete") return;
@@ -553,7 +637,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (activeJob?.tabId === tabId) cancelActiveJob();
+  if (activeJob?.tabId === tabId && !activeJob?.executor?.closingTarget) cancelActiveJob();
   checkedWorkspace().catch(() => {});
 });
 
@@ -593,13 +677,27 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({cancelled: cancelActiveJob()});
     return false;
   }
+  if (message?.type === "set-authorization-mode" && AUTH_MODES.has(message.mode)) {
+    authorizationState().then((state) => chrome.storage.session.set({
+      [AUTH_STATE_KEY]: {...state, mode: message.mode},
+    })).then(() => sendResponse({updated: true})).catch(() => sendResponse({updated: false}));
+    return true;
+  }
+  if (message?.type === "authorize-current-job" && activeJob?.boundary && activeJob.externalAuthorized) {
+    const approved = message.authorized === true;
+    recordDecision(approved ? "manual-approved" : "manual-denied").catch(() => {});
+    finishBoundary(activeJob, approved);
+    sendResponse({updated: true});
+    return false;
+  }
   if (!message || message.type !== "get-status") return false;
   if (!nativePort) connectNativeBridge();
   Promise.all([
     chrome.storage.session.get(CONNECTOR_STATE_KEY),
     chrome.storage.session.get(JOB_STATE_KEY),
     checkedWorkspace(),
-  ]).then(([stored, jobStored, workspace]) => {
+    authorizationState(),
+  ]).then(([stored, jobStored, workspace, authorization]) => {
     sendResponse({
       connector: stored[CONNECTOR_STATE_KEY] || {state: "offline", detail: "Connector starting."},
       collaborations: workspace.collaborations.map((value) => ({
@@ -608,6 +706,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         selected: value.collaboration_id === workspace.selected_collaboration_id,
       })),
       job: jobStored[JOB_STATE_KEY] || null,
+      authorization,
     });
   });
   return true;

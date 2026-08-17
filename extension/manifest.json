@@ -8,10 +8,13 @@
   "permissions": [
     "activeTab",
     "debugger",
+    "downloads",
     "nativeMessaging",
+    "notifications",
     "scripting",
     "sidePanel",
-    "storage"
+    "storage",
+    "tabGroups"
   ],
   "host_permissions": [],
   "background": {
@@ -19,8 +22,10 @@
     "type": "module"
   },
   "action": {
-    "default_title": "LLM Wiki for Chrome"
+    "default_title": "LLM Wiki for Chrome",
+    "default_icon": {"128": "icon-128.png"}
   },
+  "icons": {"128": "icon-128.png"},
   "side_panel": {
     "default_path": "sidepanel.html"
   }

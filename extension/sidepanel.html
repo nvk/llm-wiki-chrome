@@ -36,6 +36,16 @@
         </div>
         <ul id="collaborations"></ul>
       </section>
+      <section class="authorization" aria-label="Authorization mode">
+        <div class="section-heading"><h2>Authorization</h2><span id="decision-count" class="pill">0</span></div>
+        <label for="authorization-mode">Mutation mode</label>
+        <select id="authorization-mode">
+          <option value="manual">Manual confirmation</option>
+          <option value="plan">Approved plan</option>
+          <option value="automatic">Automatic bounded jobs</option>
+        </select>
+        <p class="muted">Protected actions always require local confirmation.</p>
+      </section>
       <section id="job" class="job" aria-live="polite" hidden>
         <div class="section-heading">
           <h2>Current job</h2>
@@ -43,6 +53,10 @@
         </div>
         <progress id="job-progress" max="1" value="0"></progress>
         <p id="job-detail" class="muted"></p>
+        <div id="authorization-buttons" hidden>
+          <button id="approve-job" type="button">Approve once</button>
+          <button id="deny-job" class="danger" type="button">Deny</button>
+        </div>
         <button id="cancel-job" type="button">Cancel job</button>
       </section>
       <p class="note">

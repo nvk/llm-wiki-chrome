@@ -4,11 +4,13 @@ const MAX_PRIVATE_RESULTS_BYTES = 524_288;
 const ALLOWED_CDP_METHODS = new Set([
   "Accessibility.disable", "Accessibility.enable", "Accessibility.getFullAXTree",
   "DOM.disable", "DOM.enable", "DOM.focus", "DOM.getBoxModel", "DOM.getDocument",
-  "DOM.querySelector", "DOM.scrollIntoViewIfNeeded", "Input.dispatchKeyEvent",
+  "DOM.querySelector", "DOM.scrollIntoViewIfNeeded", "DOM.setFileInputFiles", "Input.dispatchKeyEvent",
   "Input.dispatchMouseEvent", "Input.insertText", "Page.disable", "Page.enable",
-  "Page.captureScreenshot", "Log.disable", "Log.enable",
+  "Page.captureScreenshot", "Page.getLayoutMetrics", "Page.reload", "Page.handleJavaScriptDialog",
+  "Log.disable", "Log.enable", "Performance.disable", "Performance.enable", "Performance.getMetrics",
   "Network.disable", "Network.enable",
   "Runtime.disable", "Runtime.enable",
+  "Target.setAutoAttach",
 ]);
 const CONSOLE_TYPES = new Set([
   "log", "debug", "info", "error", "warning", "dir", "dirxml", "table", "trace",
@@ -112,7 +114,12 @@ export class BrowserExecutor {
     this.logCapture = null;
     this.requestCapture = null;
     this.consoleCapture = null;
+    this.downloadCapture = null;
     this.deadline = 0;
+    this.createdTab = false;
+    this.closingTarget = false;
+    this.childSessions = new Set();
+    this.targetListener = null;
   }
 
   async run(program, privateValues, requestMutation) {
@@ -135,6 +142,7 @@ export class BrowserExecutor {
       };
     } finally {
       if (this.consoleCapture) await this.stopConsoleCapture(true);
+      if (this.downloadCapture) await this.stopDownloadCapture(true);
       if (this.requestCapture) await this.stopRequestCapture(true);
       if (this.logCapture) await this.stopLogCapture(true);
       if (this.attached) await this.detachDebugger(true);
@@ -167,6 +175,10 @@ export class BrowserExecutor {
     const handlers = {
       open_or_focus_exact_url: () => this.openOrFocus(),
       navigate_same_origin: () => this.navigate(action.url),
+      create_same_origin_tab: () => this.createSameOriginTab(action.url),
+      navigate_history: () => this.navigateHistory(action.direction, action.expected_url),
+      close_target_tab: () => this.closeTargetTab(),
+      reload_exact_target: () => this.reload(action.ignore_cache),
       assert_exact_target: () => this.assertExactTarget(),
       attach_debugger: () => this.attachDebugger(),
       detach_debugger: () => this.detachDebugger(false),
@@ -177,6 +189,10 @@ export class BrowserExecutor {
       click_ax: () => this.clickAX(action.locator),
       click_dom: () => this.clickDOM(action.locator),
       focus_ax: () => this.focusAX(action.locator),
+      hover_ax: () => this.hoverAX(action.locator),
+      scroll_ax_into_view: () => this.scrollAXIntoView(action.locator),
+      drag_ax: () => this.dragAX(action.locator, action.destination, action.steps),
+      select_ax_option: () => this.selectAXOption(action.locator, action.option_locator),
       dispatch_key_chord: () => this.dispatchKeyChord(action.keys),
       insert_private_text: () => this.insertPrivateText(action.slot, action.replace_all),
       assert_ax_private_value: () => this.assertFocusedPrivateValue(action.slot),
@@ -185,7 +201,17 @@ export class BrowserExecutor {
       extract_ax_collection: () => this.extractAX(action),
       collect_ax_by_scrolling: () => this.collectAXByScrolling(action),
       capture_viewport_private: () => this.captureViewport(action),
+      capture_region_private: () => this.captureRegion(action),
+      capture_full_page_private: () => this.captureFullPage(action),
+      extract_ax_geometry: () => this.extractAXGeometry(action),
+      capture_performance_private: () => this.capturePerformance(action),
       scroll_viewport: () => this.scrollViewport(action),
+      wait_duration: () => sleep(action.duration_ms),
+      set_private_files: () => this.setPrivateFiles(action),
+      start_download_capture: () => this.startDownloadCapture(action),
+      stop_download_capture: () => this.stopDownloadCapture(false, action.timeout_ms),
+      handle_dialog: () => this.handleDialog(action),
+      trigger_credential_broker: () => this.triggerCredentialBroker(action.broker),
       start_log_capture: () => this.startLogCapture(action),
       stop_log_capture: () => this.stopLogCapture(false),
       start_request_capture: () => this.startRequestCapture(action),
@@ -260,6 +286,52 @@ export class BrowserExecutor {
     }
   }
 
+  async createSameOriginTab(url) {
+    if (this.attached) fail("debugger-state-invalid");
+    const anchor = await this.chrome.tabs.get(this.tabId);
+    const created = await this.chrome.tabs.create({windowId: anchor.windowId, url, active: true});
+    if (!Number.isInteger(created?.id)) fail("tab-create-failed");
+    this.tabId = created.id;
+    this.targetTabId = created.id;
+    this.expectedUrl = url;
+    this.createdTab = true;
+    await this.waitForTab(url);
+    await this.assertExactTarget();
+  }
+
+  async navigateHistory(direction, expectedUrl) {
+    if (!this.attached) fail("debugger-not-attached");
+    const prior = this.expectedUrl;
+    this.expectedUrl = expectedUrl;
+    try {
+      if (direction === "back") await this.chrome.tabs.goBack(this.tabId);
+      else await this.chrome.tabs.goForward(this.tabId);
+      await this.waitForTab(expectedUrl);
+    } catch (error) {
+      this.expectedUrl = prior;
+      if (error instanceof ExecutionError) throw error;
+      fail("history-navigation-failed");
+    }
+  }
+
+  async closeTargetTab() {
+    if (this.attached) fail("debugger-state-invalid");
+    this.closingTarget = true;
+    const tabId = this.tabId;
+    try {
+      await this.chrome.tabs.remove(tabId);
+      this.tabId = null;
+    } catch (_error) {
+      fail("tab-close-failed");
+    }
+  }
+
+  async reload(ignoreCache) {
+    if (!this.attached) fail("debugger-not-attached");
+    await this.command("Page.reload", {ignoreCache});
+    await this.waitForTab(this.expectedUrl);
+  }
+
   async attachDebugger() {
     if (this.attached || !Number.isInteger(this.tabId)) fail("debugger-state-invalid");
     try {
@@ -268,6 +340,20 @@ export class BrowserExecutor {
       await this.command("DOM.enable", {});
       await this.command("Accessibility.enable", {});
       await this.command("Page.enable", {});
+      if (this.chrome.debugger?.onEvent?.addListener) {
+        this.targetListener = (source, method, parameters) => {
+          if (source?.tabId !== this.tabId) return;
+          if (method === "Target.attachedToTarget" && typeof parameters?.sessionId === "string" &&
+              parameters?.targetInfo?.type === "iframe") this.childSessions.add(parameters.sessionId);
+          if (method === "Target.detachedFromTarget" && typeof parameters?.sessionId === "string") {
+            this.childSessions.delete(parameters.sessionId);
+          }
+        };
+        this.chrome.debugger.onEvent.addListener(this.targetListener);
+        await this.command("Target.setAutoAttach", {
+          autoAttach: true, waitForDebuggerOnStart: false, flatten: true,
+        });
+      }
     } catch (error) {
       if (this.attached) await this.detachDebugger(true);
       if (error instanceof ExecutionError) throw error;
@@ -279,6 +365,18 @@ export class BrowserExecutor {
     if (!this.attached) {
       if (bestEffort) return;
       fail("debugger-not-attached");
+    }
+    for (const sessionId of this.childSessions) {
+      try {
+        await this.command("Accessibility.disable", {}, sessionId);
+      } catch (_error) {
+        if (!bestEffort) fail("debugger-disable-failed");
+      }
+    }
+    this.childSessions.clear();
+    if (this.targetListener) {
+      this.chrome.debugger.onEvent.removeListener(this.targetListener);
+      this.targetListener = null;
     }
     for (const method of ["Accessibility.disable", "DOM.disable", "Page.disable"]) {
       try {
@@ -296,10 +394,12 @@ export class BrowserExecutor {
     }
   }
 
-  async command(method, parameters) {
+  async command(method, parameters, sessionId = null) {
     if (!this.attached || !ALLOWED_CDP_METHODS.has(method)) fail("cdp-method-blocked");
     try {
-      return await this.chrome.debugger.sendCommand({tabId: this.tabId}, method, parameters);
+      return await this.chrome.debugger.sendCommand({
+        tabId: this.tabId, ...(sessionId ? {sessionId} : {}),
+      }, method, parameters);
     } catch (_error) {
       fail("cdp-command-failed");
     }
@@ -360,8 +460,20 @@ export class BrowserExecutor {
   async axTree() {
     if (!this.attached) fail("debugger-not-attached");
     const result = await this.command("Accessibility.getFullAXTree", {});
-    const nodes = Array.isArray(result.nodes) ? result.nodes.filter((node) => !node.ignored) : [];
-    return {nodes, byId: new Map(nodes.map((node) => [node.nodeId, node]))};
+    const nodes = Array.isArray(result.nodes)
+      ? result.nodes.filter((node) => !node.ignored).map((node) => ({...node, _session_id: null})) : [];
+    for (const sessionId of this.childSessions) {
+      try {
+        await this.command("Accessibility.enable", {}, sessionId);
+        const child = await this.command("Accessibility.getFullAXTree", {}, sessionId);
+        if (Array.isArray(child.nodes)) nodes.push(...child.nodes
+          .filter((node) => !node.ignored).map((node) => ({...node, _session_id: sessionId})));
+      } catch (_error) {
+        // A frame may disappear between the bounded tree request and collection.
+      }
+    }
+    const key = (sessionId, nodeId) => `${sessionId || "main"}:${nodeId}`;
+    return {nodes, byId: new Map(nodes.map((node) => [key(node._session_id, node.nodeId), node]))};
   }
 
   nodeMatches(node, locator) {
@@ -384,13 +496,13 @@ export class BrowserExecutor {
   }
 
   ancestorMatches(node, locator, byId) {
-    let parent = byId.get(node.parentId);
+    let parent = byId.get(`${node._session_id || "main"}:${node.parentId}`);
     while (parent) {
       if (locator.within && this.nodeMatchesTree(parent, locator.within, byId)) return true;
       if (locator.within_name_contains_any && locator.within_name_contains_any.some(
         (value) => normalized(axValue(parent, "name")).includes(normalized(value)),
       )) return true;
-      parent = byId.get(parent.parentId);
+      parent = byId.get(`${parent._session_id || "main"}:${parent.parentId}`);
     }
     return !locator.within && !locator.within_name_contains_any;
   }
@@ -408,14 +520,14 @@ export class BrowserExecutor {
     return matches;
   }
 
-  async backendBox(backendNodeId) {
-    if (!Number.isInteger(backendNodeId)) fail("element-has-no-dom-node");
+  async backendBox(node) {
+    if (!Number.isInteger(node?.backendDOMNodeId)) fail("element-has-no-dom-node");
     try {
-      await this.command("DOM.scrollIntoViewIfNeeded", {backendNodeId});
+      await this.command("DOM.scrollIntoViewIfNeeded", {backendNodeId: node.backendDOMNodeId}, node._session_id);
     } catch (_error) {
       fail("element-scroll-failed");
     }
-    const result = await this.command("DOM.getBoxModel", {backendNodeId});
+    const result = await this.command("DOM.getBoxModel", {backendNodeId: node.backendDOMNodeId}, node._session_id);
     return boxCenter(result.model);
   }
 
@@ -437,13 +549,57 @@ export class BrowserExecutor {
 
   async clickAX(locator) {
     const [node] = await this.findAX(locator, true);
-    await this.clickPoint(await this.backendBox(node.backendDOMNodeId));
+    await this.clickPoint(await this.backendBox(node));
   }
 
   async focusAX(locator) {
     const [node] = await this.findAX(locator, true);
     if (!Number.isInteger(node.backendDOMNodeId)) fail("element-has-no-dom-node");
-    await this.command("DOM.focus", {backendNodeId: node.backendDOMNodeId});
+    await this.command("DOM.focus", {backendNodeId: node.backendDOMNodeId}, node._session_id);
+  }
+
+  async scrollAXIntoView(locator) {
+    const [node] = await this.findAX(locator, true);
+    if (!Number.isInteger(node.backendDOMNodeId)) fail("element-has-no-dom-node");
+    await this.command("DOM.scrollIntoViewIfNeeded", {backendNodeId: node.backendDOMNodeId}, node._session_id);
+  }
+
+  async hoverAX(locator) {
+    const [node] = await this.findAX(locator, true);
+    const point = await this.backendBox(node);
+    await this.command("Input.dispatchMouseEvent", {
+      type: "mouseMoved", x: point.x, y: point.y, button: "none",
+    });
+  }
+
+  async dragAX(locator, destination, steps) {
+    const [sourceNode] = await this.findAX(locator, true);
+    const [destinationNode] = await this.findAX(destination, true);
+    const source = await this.backendBox(sourceNode);
+    const target = await this.backendBox(destinationNode);
+    await this.command("Input.dispatchMouseEvent", {
+      type: "mousePressed", x: source.x, y: source.y, button: "left", clickCount: 1,
+    });
+    for (let index = 1; index <= steps; index += 1) {
+      this.checkDeadline();
+      const ratio = index / steps;
+      await this.command("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: source.x + ((target.x - source.x) * ratio),
+        y: source.y + ((target.y - source.y) * ratio),
+        button: "left",
+        buttons: 1,
+      });
+    }
+    await this.command("Input.dispatchMouseEvent", {
+      type: "mouseReleased", x: target.x, y: target.y, button: "left", clickCount: 1,
+    });
+  }
+
+  async selectAXOption(locator, optionLocator) {
+    await this.clickAX(locator);
+    await this.waitFor(() => this.findAX(optionLocator, true), Math.min(3000, this.program.limits.timeout_ms));
+    await this.clickAX(optionLocator);
   }
 
   async dispatchKeyChord(keys) {
@@ -550,7 +706,7 @@ export class BrowserExecutor {
       stable = added === 0 ? stable + 1 : 0;
       if (round >= action.max_scrolls || stable >= action.stable_rounds) break;
       const [anchor] = await this.findAX(action.scroll_anchor, true);
-      await this.scrollViewport(action, await this.backendBox(anchor.backendDOMNodeId));
+      await this.scrollViewport(action, await this.backendBox(anchor));
       await sleep(action.settle_ms);
       await this.assertExactTarget();
     }
@@ -592,6 +748,194 @@ export class BrowserExecutor {
       data_base64: result.data,
     };
     this.assertPrivateResultsBounded(action.private_result);
+  }
+
+  async storeScreenshot(action, parameters) {
+    const result = await this.command("Page.captureScreenshot", parameters);
+    if (typeof result.data !== "string" || !result.data || result.data.length % 4 !== 0 ||
+        !/^[A-Za-z0-9+/]*={0,2}$/u.test(result.data)) fail("screenshot-invalid");
+    let size;
+    try {
+      size = atob(result.data).length;
+    } catch (_error) {
+      fail("screenshot-invalid");
+    }
+    if (size > action.max_bytes) fail("screenshot-too-large");
+    this.privateResults[action.private_result] = {
+      mime_type: "image/jpeg", data_base64: result.data,
+    };
+    this.assertPrivateResultsBounded(action.private_result);
+  }
+
+  async captureRegion(action) {
+    await this.storeScreenshot(action, {
+      format: "jpeg", quality: action.quality, fromSurface: true, captureBeyondViewport: true,
+      clip: {x: action.x, y: action.y, width: action.width, height: action.height, scale: 1},
+    });
+  }
+
+  async captureFullPage(action) {
+    const metrics = await this.command("Page.getLayoutMetrics", {});
+    const size = metrics?.cssContentSize || metrics?.contentSize;
+    if (!size || typeof size.width !== "number" || typeof size.height !== "number" ||
+        size.width <= 0 || size.height <= 0 || size.width > action.max_width ||
+        size.height > action.max_height) fail("full-page-too-large");
+    await this.storeScreenshot(action, {
+      format: "jpeg", quality: action.quality, fromSurface: true, captureBeyondViewport: true,
+      clip: {x: 0, y: 0, width: size.width, height: size.height, scale: 1},
+    });
+  }
+
+  async extractAXGeometry(action) {
+    const matches = await this.findAX(action.locator, false);
+    const rows = [];
+    for (const node of matches.slice(0, action.max_items)) {
+      if (!Number.isInteger(node.backendDOMNodeId)) continue;
+      let model;
+      try {
+        model = (await this.command("DOM.getBoxModel", {
+          backendNodeId: node.backendDOMNodeId,
+        }, node._session_id)).model;
+      } catch (_error) {
+        continue;
+      }
+      const quad = model?.border || model?.content;
+      if (!Array.isArray(quad) || quad.length !== 8) continue;
+      const xs = [quad[0], quad[2], quad[4], quad[6]];
+      const ys = [quad[1], quad[3], quad[5], quad[7]];
+      rows.push({
+        role: this.safeExtractedValue(axValue(node, "role")),
+        name: this.safeExtractedValue(axValue(node, "name")),
+        x: Math.min(...xs), y: Math.min(...ys),
+        width: Math.max(...xs) - Math.min(...xs),
+        height: Math.max(...ys) - Math.min(...ys),
+      });
+    }
+    this.privateResults[action.private_result] = rows;
+    this.assertPrivateResultsBounded(action.private_result);
+  }
+
+  async capturePerformance(action) {
+    await this.command("Performance.enable", {});
+    try {
+      const result = await this.command("Performance.getMetrics", {});
+      const metrics = Array.isArray(result.metrics) ? result.metrics.slice(0, action.max_metrics) : [];
+      this.privateResults[action.private_result] = metrics
+        .filter((row) => row && typeof row.name === "string" &&
+          typeof row.value === "number" && Number.isFinite(row.value))
+        .map((row) => ({name: row.name.slice(0, 128), value: row.value}));
+      this.assertPrivateResultsBounded(action.private_result);
+    } finally {
+      await this.command("Performance.disable", {});
+    }
+  }
+
+  async setPrivateFiles(action) {
+    const encoded = this.privateValues[action.slot];
+    let files;
+    try {
+      files = JSON.parse(encoded);
+    } catch (_error) {
+      fail("private-files-invalid");
+    }
+    if (!Array.isArray(files) || files.length < 1 || files.length > action.max_files ||
+        files.some((value) => typeof value !== "string" || !value.startsWith("/"))) {
+      fail("private-files-invalid");
+    }
+    const [node] = await this.findAX(action.locator, true);
+    if (!Number.isInteger(node.backendDOMNodeId)) fail("element-has-no-dom-node");
+    await this.command("DOM.setFileInputFiles", {
+      files, backendNodeId: node.backendDOMNodeId,
+    }, node._session_id);
+  }
+
+  handleDownloadCreated(item) {
+    const capture = this.downloadCapture;
+    if (!capture || item?.tabId !== this.tabId || !Number.isInteger(item.id)) return;
+    if (capture.items.size >= capture.maxItems) {
+      capture.truncated = true;
+      return;
+    }
+    capture.items.set(item.id, {
+      id: item.id,
+      filename: typeof item.filename === "string" ? item.filename : "",
+      mime: typeof item.mime === "string" ? item.mime : "",
+      bytes_received: Number.isFinite(item.bytesReceived) ? item.bytesReceived : 0,
+      total_bytes: Number.isFinite(item.totalBytes) ? item.totalBytes : -1,
+      state: typeof item.state === "string" ? item.state : "in_progress",
+      danger: typeof item.danger === "string" ? item.danger : "unknown",
+    });
+  }
+
+  handleDownloadChanged(delta) {
+    const row = this.downloadCapture?.items.get(delta?.id);
+    if (!row) return;
+    for (const [target, source] of [
+      ["filename", "filename"], ["mime", "mime"], ["bytes_received", "bytesReceived"],
+      ["total_bytes", "totalBytes"], ["state", "state"], ["danger", "danger"],
+    ]) {
+      const value = delta[source]?.current;
+      if (["filename", "mime", "state", "danger"].includes(target) && typeof value === "string") {
+        row[target] = value;
+      } else if (["bytes_received", "total_bytes"].includes(target) && Number.isFinite(value)) {
+        row[target] = value;
+      }
+    }
+  }
+
+  async startDownloadCapture(action) {
+    if (this.downloadCapture || !this.chrome.downloads?.onCreated || !this.chrome.downloads?.onChanged) {
+      fail("download-capture-state-invalid");
+    }
+    const capture = {
+      privateResult: action.private_result, maxItems: action.max_items, items: new Map(),
+      truncated: false, created: null, changed: null,
+    };
+    capture.created = (item) => this.handleDownloadCreated(item);
+    capture.changed = (delta) => this.handleDownloadChanged(delta);
+    this.downloadCapture = capture;
+    this.chrome.downloads.onCreated.addListener(capture.created);
+    this.chrome.downloads.onChanged.addListener(capture.changed);
+  }
+
+  async stopDownloadCapture(bestEffort, timeoutMs = 100) {
+    const capture = this.downloadCapture;
+    if (!capture) {
+      if (bestEffort) return;
+      fail("download-capture-state-invalid");
+    }
+    if (!bestEffort) {
+      await this.waitFor(() => {
+        if (!capture.items.size || [...capture.items.values()].some((row) => row.state === "in_progress")) {
+          fail("download-not-complete");
+        }
+        return true;
+      }, timeoutMs);
+    }
+    this.downloadCapture = null;
+    this.chrome.downloads.onCreated.removeListener(capture.created);
+    this.chrome.downloads.onChanged.removeListener(capture.changed);
+    if (bestEffort) return;
+    this.privateResults[capture.privateResult] = {
+      items: [...capture.items.values()], truncated: capture.truncated,
+    };
+    this.assertPrivateResultsBounded(capture.privateResult);
+  }
+
+  async handleDialog(action) {
+    const promptText = action.prompt_slot == null ? undefined : this.privateValues[action.prompt_slot];
+    await this.command("Page.handleJavaScriptDialog", {
+      accept: action.accept,
+      ...(promptText === undefined ? {} : {promptText}),
+    });
+  }
+
+  async triggerCredentialBroker(broker) {
+    if (broker === "onepassword") {
+      await this.dispatchKeyChord(["platform-primary", "shift", "x"]);
+      return;
+    }
+    await this.dispatchKeyChord(["arrow-down"]);
   }
 
   async scrollViewport(action, point = {x: 1, y: 1}) {

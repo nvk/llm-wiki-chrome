@@ -19,6 +19,7 @@ packages = ["browser_executor"]
 "share/llm-wiki-chrome/extension" = [
   "extension/collaboration-marker.js",
   "extension/executor.mjs",
+  "extension/icon-128.png",
   "extension/manifest.json",
   "extension/protocol.mjs",
   "extension/service-worker.js",

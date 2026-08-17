@@ -104,6 +104,7 @@ button {
 }
 
 .workspace,
+.authorization,
 .job {
   margin: -12px 0 28px;
   padding: 18px;
@@ -112,6 +113,33 @@ button {
   background: #fffefa;
   box-shadow: 0 8px 24px rgb(52 65 57 / 8%);
 }
+
+.authorization label {
+  display: block;
+  margin: 16px 0 6px;
+  color: #626c66;
+  font-size: 13px;
+}
+
+.authorization select {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #c9cec9;
+  border-radius: 10px;
+  background: #fff;
+  font: inherit;
+}
+
+#authorization-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+#authorization-buttons[hidden] { display: none; }
+#authorization-buttons button { margin: 0; }
+#authorization-buttons .danger { background: #9f3f36; }
 
 .section-heading,
 #collaborations li {

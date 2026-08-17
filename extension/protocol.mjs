@@ -1,13 +1,18 @@
 export const BROWSER_PROTOCOL = "llm-wiki-browser-executor/v1";
 
 const ALLOWED_OPERATIONS = new Set([
-  "open_or_focus_exact_url", "navigate_same_origin", "assert_exact_target",
+  "open_or_focus_exact_url", "navigate_same_origin", "create_same_origin_tab", "navigate_history",
+  "close_target_tab", "reload_exact_target", "assert_exact_target",
   "attach_debugger", "detach_debugger", "wait_ax", "wait_dom", "assert_ax",
-  "first_success", "click_ax", "click_dom", "focus_ax", "dispatch_key_chord",
+  "first_success", "click_ax", "click_dom", "focus_ax", "hover_ax", "drag_ax",
+  "select_ax_option", "scroll_ax_into_view", "dispatch_key_chord",
   "insert_private_text", "assert_ax_private_value", "extract_ax",
   "assert_ax_private_sha256",
   "extract_ax_collection", "collect_ax_by_scrolling", "capture_viewport_private",
-  "scroll_viewport", "start_log_capture", "stop_log_capture", "before_mutation",
+  "capture_region_private", "capture_full_page_private", "extract_ax_geometry",
+  "capture_performance_private", "scroll_viewport", "wait_duration", "set_private_files",
+  "start_download_capture", "stop_download_capture", "handle_dialog",
+  "trigger_credential_broker", "start_log_capture", "stop_log_capture", "before_mutation",
   "start_request_capture", "stop_request_capture",
   "start_console_capture", "stop_console_capture",
 ]);
@@ -22,9 +27,15 @@ const TOP_LEVEL_KEYS = new Set([
 const PUBLIC_RESULT_FIELDS = new Set([
   "status", "action_count", "mutation_started", "private_result_count",
 ]);
-const MUTATION_ONLY = new Set(["insert_private_text", "before_mutation"]);
+const MUTATION_ONLY = new Set([
+  "insert_private_text", "before_mutation", "drag_ax", "select_ax_option",
+  "set_private_files", "handle_dialog", "trigger_credential_broker",
+  "create_same_origin_tab", "navigate_history", "close_target_tab",
+]);
 const LOCATOR_OPERATIONS = new Set([
-  "wait_ax", "wait_dom", "assert_ax", "click_ax", "click_dom", "focus_ax",
+  "wait_ax", "wait_dom", "assert_ax", "click_ax", "click_dom", "focus_ax", "hover_ax",
+  "scroll_ax_into_view", "drag_ax", "select_ax_option", "set_private_files",
+  "extract_ax_geometry",
   "extract_ax", "extract_ax_collection", "collect_ax_by_scrolling",
   "assert_ax_private_sha256",
 ]);
@@ -41,6 +52,10 @@ const LOCATOR_KEYS = new Set([
 const ACTION_KEYS = new Map([
   ["open_or_focus_exact_url", new Set(["op"])],
   ["navigate_same_origin", new Set(["op", "url"])],
+  ["create_same_origin_tab", new Set(["op", "url"])],
+  ["navigate_history", new Set(["op", "direction", "expected_url"])],
+  ["close_target_tab", new Set(["op"])],
+  ["reload_exact_target", new Set(["op", "ignore_cache"])],
   ["assert_exact_target", new Set(["op"])],
   ["attach_debugger", new Set(["op"])],
   ["detach_debugger", new Set(["op"])],
@@ -54,6 +69,10 @@ const ACTION_KEYS = new Map([
   ["click_ax", new Set(["op", "locator"])],
   ["click_dom", new Set(["op", "locator"])],
   ["focus_ax", new Set(["op", "locator"])],
+  ["hover_ax", new Set(["op", "locator"])],
+  ["scroll_ax_into_view", new Set(["op", "locator"])],
+  ["drag_ax", new Set(["op", "locator", "destination", "steps"])],
+  ["select_ax_option", new Set(["op", "locator", "option_locator"])],
   ["dispatch_key_chord", new Set(["op", "keys"])],
   ["insert_private_text", new Set(["op", "slot", "replace_all"])],
   ["assert_ax_private_value", new Set(["op", "slot"])],
@@ -66,7 +85,21 @@ const ACTION_KEYS = new Map([
     "scroll_anchor",
   ])],
   ["capture_viewport_private", new Set(["op", "private_result", "quality", "max_bytes"])],
+  ["capture_region_private", new Set([
+    "op", "private_result", "quality", "max_bytes", "x", "y", "width", "height",
+  ])],
+  ["capture_full_page_private", new Set([
+    "op", "private_result", "quality", "max_bytes", "max_width", "max_height",
+  ])],
+  ["extract_ax_geometry", new Set(["op", "locator", "private_result", "max_items"])],
+  ["capture_performance_private", new Set(["op", "private_result", "max_metrics"])],
   ["scroll_viewport", new Set(["op", "direction", "distance_px"])],
+  ["wait_duration", new Set(["op", "duration_ms"])],
+  ["set_private_files", new Set(["op", "locator", "slot", "max_files"])],
+  ["start_download_capture", new Set(["op", "private_result", "max_items"])],
+  ["stop_download_capture", new Set(["op", "timeout_ms"])],
+  ["handle_dialog", new Set(["op", "accept", "prompt_slot"])],
+  ["trigger_credential_broker", new Set(["op", "broker"])],
   ["start_log_capture", new Set(["op", "private_result", "max_entries", "max_text_bytes"])],
   ["start_request_capture", new Set(["op", "private_result", "max_entries", "max_url_bytes"])],
   ["start_console_capture", new Set([
@@ -244,11 +277,31 @@ function assertPolicyUrl(rawUrl, target, initial = false) {
 
 function validateAction(action, program, index) {
   rejectUnknownKeys(action, ACTION_KEYS.get(action.op), `Action ${index}`);
-  if (action.op === "navigate_same_origin") assertPolicyUrl(action.url, program.target);
+  if (["navigate_same_origin", "create_same_origin_tab"].includes(action.op)) {
+    assertPolicyUrl(action.url, program.target);
+  }
+  if (action.op === "navigate_history") {
+    if (!["back", "forward"].includes(action.direction)) throw new Error("A history direction is invalid.");
+    assertPolicyUrl(action.expected_url, program.target);
+  }
+  if (action.op === "reload_exact_target" && typeof action.ignore_cache !== "boolean") {
+    throw new Error("A reload declaration is invalid.");
+  }
   if (LOCATOR_OPERATIONS.has(action.op)) validateLocator(action.locator, `Action ${index} locator`);
   if (LOCATOR_OPERATIONS.has(action.op)) {
     if (DOM_LOCATOR_OPERATIONS.has(action.op)) validateDOMLocatorShape(action.locator);
     else validateAXLocatorShape(action.locator);
+  }
+  if (action.op === "drag_ax") {
+    validateLocator(action.destination, `Action ${index} destination`);
+    validateAXLocatorShape(action.destination);
+    if (!Number.isInteger(action.steps) || action.steps < 2 || action.steps > 50) {
+      throw new Error("A drag declaration is invalid.");
+    }
+  }
+  if (action.op === "select_ax_option") {
+    validateLocator(action.option_locator, `Action ${index} option locator`);
+    validateAXLocatorShape(action.option_locator);
   }
   if (["wait_ax", "wait_dom"].includes(action.op) &&
       (!Number.isInteger(action.timeout_ms) || action.timeout_ms < 50 || action.timeout_ms > 300000)) {
@@ -259,12 +312,18 @@ function validateAction(action, program, index) {
        new Set(action.keys).size !== action.keys.length || action.keys.some((key) => !KEY_NAMES.has(key)))) {
     throw new Error("A key chord is invalid.");
   }
-  if (["insert_private_text", "assert_ax_private_value", "assert_ax_private_sha256"].includes(action.op) &&
+  if ([
+    "insert_private_text", "assert_ax_private_value", "assert_ax_private_sha256", "set_private_files",
+  ].includes(action.op) &&
       !program.private_slots.includes(action.slot)) {
     throw new Error("An action references an undeclared private slot.");
   }
   if (action.op === "insert_private_text" && typeof action.replace_all !== "boolean") {
     throw new Error("A private insertion mode is invalid.");
+  }
+  if (action.op === "set_private_files" &&
+      (!Number.isInteger(action.max_files) || action.max_files < 1 || action.max_files > 16)) {
+    throw new Error("A private file declaration is invalid.");
   }
   if ([
     "extract_ax", "extract_ax_collection", "collect_ax_by_scrolling", "assert_ax_private_sha256",
@@ -283,11 +342,31 @@ function validateAction(action, program, index) {
     validateLocator(action.scroll_anchor, `Action ${index} scroll anchor`);
     validateAXLocatorShape(action.scroll_anchor);
   }
-  if (action.op === "capture_viewport_private" &&
+  if (["capture_viewport_private", "capture_region_private", "capture_full_page_private"].includes(action.op) &&
       (!program.result.private_fields.includes(action.private_result) ||
        !Number.isInteger(action.quality) || action.quality < 10 || action.quality > 90 ||
        !Number.isInteger(action.max_bytes) || action.max_bytes < 16384 || action.max_bytes > 262144)) {
     throw new Error("A private screenshot declaration is invalid.");
+  }
+  if (action.op === "capture_region_private" &&
+      (![action.x, action.y].every((value) => typeof value === "number" && value >= 0 && value <= 100000) ||
+       ![action.width, action.height].every((value) => typeof value === "number" && value >= 1 && value <= 10000))) {
+    throw new Error("A screenshot region is invalid.");
+  }
+  if (action.op === "capture_full_page_private" &&
+      (![action.max_width, action.max_height].every((value) =>
+        Number.isInteger(value) && value >= 1 && value <= 20000))) {
+    throw new Error("A full-page screenshot declaration is invalid.");
+  }
+  if (action.op === "extract_ax_geometry" &&
+      (!program.result.private_fields.includes(action.private_result) ||
+       !Number.isInteger(action.max_items) || action.max_items < 1 || action.max_items > 500)) {
+    throw new Error("A geometry extraction declaration is invalid.");
+  }
+  if (action.op === "capture_performance_private" &&
+      (!program.result.private_fields.includes(action.private_result) ||
+       !Number.isInteger(action.max_metrics) || action.max_metrics < 1 || action.max_metrics > 100)) {
+    throw new Error("A performance capture declaration is invalid.");
   }
   if (["scroll_viewport", "collect_ax_by_scrolling"].includes(action.op) &&
       (!SCROLL_DIRECTIONS.has(action.direction) ||
@@ -305,6 +384,30 @@ function validateAction(action, program, index) {
        new Set(action.dedupe_fields).size !== action.dedupe_fields.length ||
        action.dedupe_fields.some((field) => !action.fields.includes(field)))) {
     throw new Error("A scrolling collection declaration is invalid.");
+  }
+  if (action.op === "wait_duration" &&
+      (!Number.isInteger(action.duration_ms) || action.duration_ms < 20 || action.duration_ms > 30000)) {
+    throw new Error("A wait duration is invalid.");
+  }
+  if (action.op === "start_download_capture" &&
+      (!program.result.private_fields.includes(action.private_result) ||
+       !Number.isInteger(action.max_items) || action.max_items < 1 || action.max_items > 16)) {
+    throw new Error("A download capture declaration is invalid.");
+  }
+  if (action.op === "stop_download_capture" &&
+      (!Number.isInteger(action.timeout_ms) || action.timeout_ms < 100 || action.timeout_ms > 120000)) {
+    throw new Error("A download wait is invalid.");
+  }
+  if (action.op === "handle_dialog" &&
+      (typeof action.accept !== "boolean" ||
+       (action.prompt_slot !== null && action.prompt_slot !== undefined &&
+        !program.private_slots.includes(action.prompt_slot)) ||
+       (!action.accept && action.prompt_slot !== null && action.prompt_slot !== undefined))) {
+    throw new Error("A dialog action is invalid.");
+  }
+  if (action.op === "trigger_credential_broker" &&
+      !["onepassword", "browser-password-manager"].includes(action.broker)) {
+    throw new Error("A credential broker is invalid.");
   }
   if (action.op === "start_log_capture" &&
       (!program.result.private_fields.includes(action.private_result) ||
@@ -406,14 +509,16 @@ export async function validateProgram(program) {
   flat.forEach((action, index) => validateAction(action, program, index));
   const operations = flat.map((action) => action.op);
   const topLevel = program.actions.map((action) => action.op);
-  if (topLevel[0] !== "open_or_focus_exact_url" || topLevel.at(-1) !== "detach_debugger" ||
+  if (topLevel[0] !== "open_or_focus_exact_url" ||
+      !["detach_debugger", "close_target_tab"].includes(topLevel.at(-1)) ||
       topLevel.filter((op) => op === "open_or_focus_exact_url").length !== 1 ||
       topLevel.filter((op) => op === "attach_debugger").length !== 1 ||
       topLevel.filter((op) => op === "detach_debugger").length !== 1 ||
       operations.filter((op) => op === "open_or_focus_exact_url").length !== 1 ||
       operations.filter((op) => op === "attach_debugger").length !== 1 ||
       operations.filter((op) => op === "detach_debugger").length !== 1 ||
-      operations.indexOf("attach_debugger") >= operations.indexOf("detach_debugger")) {
+      operations.indexOf("attach_debugger") >= operations.indexOf("detach_debugger") ||
+      (topLevel.at(-1) === "close_target_tab" && topLevel.at(-2) !== "detach_debugger")) {
     throw new Error("The browser program lifecycle is invalid.");
   }
   const boundaries = operations.filter((operation) => operation === "before_mutation").length;
@@ -457,12 +562,23 @@ export async function validateProgram(program) {
        operations.indexOf("start_console_capture") >= operations.indexOf("stop_console_capture"))) {
     throw new Error("The private console capture lifecycle is invalid.");
   }
+  const downloadStarts = operations.filter((operation) => operation === "start_download_capture").length;
+  const downloadStops = operations.filter((operation) => operation === "stop_download_capture").length;
+  if (downloadStarts !== downloadStops || downloadStarts > 1 ||
+      topLevel.filter((operation) => operation === "start_download_capture").length !== downloadStarts ||
+      topLevel.filter((operation) => operation === "stop_download_capture").length !== downloadStops ||
+      (downloadStarts === 1 &&
+       operations.indexOf("start_download_capture") >= operations.indexOf("stop_download_capture"))) {
+    throw new Error("The private download capture lifecycle is invalid.");
+  }
   const extracted = new Set(
     flat.filter((action) => [
       "extract_ax", "extract_ax_collection", "collect_ax_by_scrolling", "capture_viewport_private",
       "start_log_capture",
       "start_request_capture",
       "start_console_capture",
+      "capture_region_private", "capture_full_page_private", "extract_ax_geometry",
+      "capture_performance_private", "start_download_capture",
     ].includes(action.op))
       .map((action) => action.private_result),
   );

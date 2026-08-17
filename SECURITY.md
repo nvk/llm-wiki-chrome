@@ -36,13 +36,15 @@ manifest content script. Marker injection failure does not broaden or preserve
 a grant.
 
 The direct agent surface requires a collaboration ID obtained from
-`browser_tabs` on every read or interaction. It supports only bounded AX
-snapshots, viewport screenshots, semantic AX clicks, private text insertion,
-allowlisted key chords, and viewport scrolling. It has no arbitrary program,
-CSS selector, script, URL-navigation, cookie, storage, download, upload, or
-credential tool. Direct click/type/key calls cross one internal mutation
-boundary; they are intentionally unsuitable for effects that require a
-provider-owned journal or transactional verification.
+`browser_tabs` on every read or interaction. It exposes only fixed typed tools:
+exact same-origin tab lifecycle/navigation, bounded waits and AX snapshots,
+byte-capped visual capture and geometry, semantic pointer/keyboard/form actions,
+bounded diagnostics, registered-root file transfer, password-manager UI
+activation, and an in-memory non-replayable workflow draft. It has no arbitrary
+program, CSS selector, script, cookie, browser storage, ambient tab, credential
+value, or natural-language task tool. Mutation tools cross one internal
+boundary; they remain unsuitable for effects that require a provider-owned
+journal or transactional verification.
 `browser_status` reports only connector readiness and the number of explicit
 grants; it returns no URL, origin, identifier, or page content.
 
@@ -50,7 +52,7 @@ The extension independently validates the signed program and private-slot
 shape. It accepts an HTTPS origin only when the program's collaboration ID,
 exact URL, and origin match the live user grant. The extension activates that exact tab, aborts on
 target or focus drift, uses only a
-hardcoded DOM/Accessibility/Input/Page/Log/Network/Runtime CDP allowlist, and detaches the debugger
+hardcoded DOM/Accessibility/Input/Page/Log/Network/Runtime/Performance/Target CDP allowlist, and detaches the debugger
 in a `finally` path. Waits retry only locator-not-ready conditions; cancellation,
 deadline, debugger, and target errors fail immediately. Public results are
 filtered to declared content-free counters, while bounded page data is returned
@@ -58,6 +60,39 @@ only through declared private result slots. Viewport scrolling and scrolling
 collection are bounded, typed read actions; long-list collection is capped by
 the program repeat, item, deadline, and private-result limits. Extracted link
 URLs and descriptions remain private results.
+
+Child-frame accessibility uses flattened debugger attachment only for iframe
+targets belonging to the exact tab. Every child command remains on the same
+fixed CDP allowlist and carries its captured debugger session ID; frame sessions
+are discarded on detach. The executor does not enumerate or attach unrelated
+targets.
+
+The `tabs` API is used only with tab IDs already granted by the user or created
+from a signed same-origin action. The green tab group is presentation, not
+authority. New tabs can inherit a grant only when a signed program starts from
+an existing exact grant and names an exact URL on that same origin. Back and
+forward require the exact expected destination. Cross-origin drift still
+revokes the grant.
+
+Uploads and downloads have no default filesystem access. The local companion
+requires machine-local registered roots, rejects final symlinks and realpath
+escapes, and streams hashes. A download must belong to the exact tab, complete,
+remain inside a registered root, and have a safe/accepted Chrome danger state.
+File paths and metadata use private slots/results and never appear in the panel.
+
+Authorization mode and decision counts live only in Chrome session storage.
+Manual mode pauses at the one mutation boundary. Approved-plan and automatic
+modes still require the signed exact program and local adapter callback.
+File upload, dialog handling, and credential-broker activation always fall back
+to manual confirmation. The extension stores no page/job content in its ledger.
+
+The direct surface may schedule only one-shot, read-only AX snapshots in memory.
+Each schedule is bounded by the exact collaboration grant, delay, result-size
+limit, and lifetime of the MCP process. It can be cancelled before execution;
+its private result is deleted after one retrieval. The extension does not own a
+durable queue, recurring schedule, scheduled mutation, recovery journal, or
+background browsing authority. Those remain in a targeted adapter or external
+scheduler with provider-specific authorization and verification.
 
 Targeted adapters may bind a mutation to a private expected SHA-256 of a
 bounded ordered AX projection. `assert_ax_private_sha256` recomputes that

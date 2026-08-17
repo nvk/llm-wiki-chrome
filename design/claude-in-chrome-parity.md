@@ -39,14 +39,14 @@ browser planner into this repository.
 | Multiple tabs | Up to 16 individually clicked active-tab grants; each job remains exact-target | Live two-origin routing gate passed |
 | Request debugging | Paired exact-tab request metadata capture without queries, headers, bodies, cookies, IDs, or interception | Implemented in source; live-browser gate pending |
 | Console API debugging | Paired exact-tab `Runtime.consoleAPICalled` capture with bounded scalar-only arguments and no evaluation or object dereferencing | Implemented in source; live-browser gate pending |
-| Downloads and uploads | Registered file roots, typed operations, provider verification | Later explicit effect capability |
-| Workflow recording / shortcuts | Record only typed actions, require review and signing before replay | Later targeted-adapter tooling |
-| Scheduled/background tasks | External scheduler plus durable adapter journal | Later; never extension-owned intent |
-| Notifications | Content-free completion/attention status | Later optional permission |
+| Downloads and uploads | Registered file roots, typed operations, provider verification | Implemented; live transfer gate pending |
+| Workflow recording / shortcuts | Record only typed actions, require review before provider compilation | Implemented as non-replayable in-memory draft |
+| Scheduled/background tasks | In-memory read-only snapshot schedules; durable work uses external scheduler plus adapter journal | Implemented bounded slice |
+| Notifications | Content-free completion/attention status | Implemented |
 | Site allow/block controls | Exact manifest origins plus adapter registry policy | Current restrictive model |
 | Manual/automatic permission modes | Public approval plus one-shot mutation boundary | Mutation phase |
 | Prompt-injection classifiers | Treat page content as data; page content never becomes executable actions | Architectural control; evals still needed |
-| Password-manager integration | Out of scope until a separate credential-broker design | Not planned |
+| Password-manager integration | Focus plus password-manager UI activation; executor never receives secrets | Implemented boundary; live 1Password gate pending |
 
 ## Current implementation slice
 
@@ -55,8 +55,8 @@ private exact-URL discovery, per-tab and whole-workspace revocation, content-fre
 job progress and cancellation, exact-tab activation, same-origin/path
 enforcement, typed DOM/AX queries, bounded waits and branches, private
 extraction, clicks, focus, key chords, private text insertion, and the governed
-mutation challenge. A local MCP server now exposes eight fixed structured agent
-tools, so clicking the extension is sufficient to make the exact tab visible
+mutation challenge. A local MCP server now exposes a fixed structured agent
+inventory, so clicking the extension is sufficient to make the exact tab visible
 and operable to a newly started configured agent session. It does not expose an
 arbitrary program or scripting tool. Per-Chrome-instance private sockets are
 aggregated by exact grant, avoiding last-process-wins behavior when several
@@ -85,11 +85,18 @@ second grant, and both collaboration IDs remained stable afterward. The
 isolated harness and targeted-adapter shadow runs remain pending; this source
 state has not been released as an upgrade.
 
-Arbitrary sites, tab groups, downloads/uploads, recording, schedules, and
-notifications are separate review events rather than
-prerequisites for this slice. The viewport-only JPEG action was added without a
-new permission: it is exact-target, quality- and byte-capped, declared as a
-private result, and never persisted or uploaded by the executor.
+The parity branch now also implements a controlled green tab group, exact
+same-origin tab lifecycle and navigation, semantic waits/hover/select/drag,
+region and capped full-page capture, geometry, performance diagnostics,
+registered-root uploads/downloads, content-free notifications, authorization
+modes, protected-action confirmation, password-manager UI activation, an
+in-memory review-required workflow draft, and a provider-driver verification
+helper. Only a one-shot, cancellable, in-memory read-only snapshot schedule is
+available directly. Recurring or durable scheduling, scheduled mutations,
+recovery journals, provider selectors, workflow compilation, and final
+verification deliberately remain in targeted adapters.
+Arbitrary sites, ambient tabs, raw JavaScript, raw CDP, and extension-owned
+intent remain out of scope.
 
 ## Deferred Homebrew packaging
 

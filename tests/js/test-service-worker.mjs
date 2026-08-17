@@ -292,6 +292,23 @@ assert.deepEqual(mutationResult.public, {status: "ok"});
 assert.equal(attached, false);
 await waitFor(() => stored.activeJobState === null);
 
+assert.equal((await runtimeMessage({type: "set-authorization-mode", mode: "manual"})).updated, true);
+const manualStart = nativePort.sent.length;
+nativePort.onMessage.emit({
+  protocol: PROTOCOL, type: "job", job_id: JOB_ID, program: mutationProgram, private_values: {},
+});
+await nativePort.next((message) => message.type === "before-mutation", manualStart);
+nativePort.onMessage.emit({
+  protocol: PROTOCOL, type: "mutation-authorized", job_id: JOB_ID, authorized: true,
+});
+await waitFor(() => stored.activeJobState?.state === "awaiting-user");
+assert.equal((await runtimeMessage({type: "authorize-current-job", authorized: true})).updated, true);
+const manualResult = await nativePort.next((message) => message.type === "result", manualStart);
+assert.equal(manualResult.status, "ok");
+await waitFor(() => stored.activeJobState === null);
+assert.ok(stored.authorizationState.decisions >= 1);
+await runtimeMessage({type: "set-authorization-mode", mode: "plan"});
+
 const cancelledStart = nativePort.sent.length;
 nativePort.onMessage.emit({
   protocol: PROTOCOL,

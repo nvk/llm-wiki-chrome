@@ -79,12 +79,15 @@ surface instead of constructing programs themselves:
 .venv/bin/python adapter.py mcp-server
 ```
 
-The MCP server publishes only eight fixed tools: `browser_status`, `browser_tabs`,
-`browser_snapshot`, `browser_screenshot`, `browser_click`, `browser_type`,
-`browser_key`, and `browser_scroll`. It has no arbitrary program, CSS selector,
-script, or natural-language execution tool. Page content is returned only to
-the calling local agent for the active request and is not persisted by this
-repository or shown in the side panel.
+The MCP server publishes a fixed structured tool inventory covering explicit
+tab lifecycle, exact same-origin navigation, waits, accessibility snapshots,
+viewport/region/full-page screenshots, element geometry, click/hover/type/
+select/drag/key/scroll, bounded diagnostics, registered-root file transfer,
+password-manager UI activation, and in-memory workflow drafting. It has no
+arbitrary program, CSS selector, script, natural-language execution tool, or
+unrelated-tab query. Page content is returned only to the calling local agent
+for the active request and is not persisted by this repository or shown in the
+side panel.
 
 ## Development status
 
@@ -100,6 +103,29 @@ bounded execution slice:
   Chrome profiles or processes cannot overwrite one another's shared tabs;
 - a fixed page outline/pill and toolbar badge showing exactly which tabs are
   controlled;
+- a green `LLM Wiki` tab group containing only explicit grants;
+- same-origin open/navigate/history/reload, exact-tab focus/close, semantic
+  waits, hover, option selection, drag/drop, and scroll-to-element primitives;
+- flattened, bounded accessibility collection across attached child-frame
+  targets, with session-bound geometry and interactions; semantic AX discovery
+  also covers open shadow trees without enabling arbitrary DOM traversal;
+- region and dimension-capped full-page screenshots, semantic element geometry,
+  and bounded performance metrics;
+- machine-local upload/download roots with realpath checks, completed-download
+  verification, danger-state enforcement, streaming hashes, and no implicit
+  filesystem authority;
+- manual, approved-plan, and automatic bounded authorization modes with
+  protected actions always falling back to local confirmation and a
+  content-free session decision counter;
+- content-free completion/attention notifications;
+- cancellable in-memory read-only snapshot schedules whose private results are
+  retrieved once and whose authority expires with the MCP process or tab grant;
+- in-memory recording of already-typed agent actions into a hash-bound,
+  review-required, deliberately non-replayable provider-driver draft;
+- password-manager UI activation that never receives a credential value; and
+- a provider-driver SDK that binds targeted adapters to the exact grant,
+  approved plan hash, one mutation callback, and adapter-owned postcondition
+  verification;
 - action-listener tab grant, side-panel status/retry control, and content-free
   agent readiness tool;
 - a content-free side-panel workspace, progress meter, per-tab revocation, and cancellation;
@@ -206,6 +232,41 @@ Uninstall only the native companion registration with:
 llm-wiki-chrome uninstall
 ```
 
+File transfer is disabled by default. Enable only explicit machine-local roots
+in `~/.config/llm-wiki/browser-executor.json`:
+
+```json
+{
+  "upload_roots": ["/absolute/private/staging/uploads"],
+  "download_roots": ["/absolute/private/staging/downloads"]
+}
+```
+
+Every path rejects a final symlink, resolves its parent chain, and must stay inside a
+registered root. Upload values travel only in private slots. Downloads must be
+complete, accepted as safe by Chrome, inside a registered root, and are hashed
+by the local companion before being returned to the caller.
+
+The side panel offers `Manual`, `Approved plan`, and `Automatic bounded jobs`.
+The default is `Approved plan`. File upload, dialog handling, and credential-
+broker activation remain protected actions and always require local manual
+confirmation. Authorization history is a content-free session counter rather
+than a page-content log.
+
+Workflow recording captures only typed operations already requested through
+the fixed MCP surface. `browser_record_stop` returns an in-memory, hash-bound,
+review-required draft. The generic executor never replays it; a targeted
+adapter must review, compile, authorize, journal, and independently verify a
+versioned provider workflow. The direct surface permits only bounded in-memory
+scheduling of a read-only snapshot while the exact grant and MCP process remain
+live. Durable or recurring scheduling, mutations, recovery, and journals remain
+in the targeted adapter or external scheduler, never in the extension's intent
+layer.
+
+Targeted adapters can centralize the execution boundary with
+`browser_executor.driver.ProviderDriverSession`, which rejects plan-hash or
+exact-grant drift and requires an adapter-owned `status: verified` postcondition.
+
 Build a deterministic, content-free Chrome Web Store ZIP without publishing it:
 
 ```sh
@@ -261,7 +322,7 @@ codex mcp add llm-wiki-browser \
   -- .venv/bin/python adapter.py mcp-server
 ```
 
-Restarting an agent session after registration makes the eight tools available.
+Restarting an agent session after registration makes the fixed tool inventory available.
 Chrome still exposes nothing until the user clicks the extension on a specific
 HTTPS tab, and stopping the collaboration revokes the grant. An exceptional
 runtime that cannot access the private default `/tmp` directory may set

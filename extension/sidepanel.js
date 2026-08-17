@@ -13,6 +13,11 @@ const jobState = document.getElementById("job-state");
 const jobProgress = document.getElementById("job-progress");
 const jobDetail = document.getElementById("job-detail");
 const cancelJobButton = document.getElementById("cancel-job");
+const authorizationMode = document.getElementById("authorization-mode");
+const decisionCount = document.getElementById("decision-count");
+const authorizationButtons = document.getElementById("authorization-buttons");
+const approveJobButton = document.getElementById("approve-job");
+const denyJobButton = document.getElementById("deny-job");
 let connectFailure = "";
 
 const labels = {
@@ -80,12 +85,12 @@ function renderCollaborations(collaborations, connectorReady) {
 }
 
 function renderJob(job) {
-  const active = job && ["running", "authorizing", "cancelling"].includes(job.state);
+  const active = job && ["running", "authorizing", "awaiting-user", "cancelling"].includes(job.state);
   jobElement.hidden = !active;
   if (!active) return;
   const maximum = Number.isInteger(job.max_actions) && job.max_actions > 0 ? job.max_actions : 1;
   const count = Number.isInteger(job.action_count) ? Math.max(0, Math.min(job.action_count, maximum)) : 0;
-  jobState.textContent = job.state === "authorizing"
+  jobState.textContent = job.state === "awaiting-user" ? "Confirmation required" : job.state === "authorizing"
     ? "Authorizing"
     : job.state === "cancelling" ? "Cancelling" : "Running";
   jobState.className = `pill ${job.state}`;
@@ -94,6 +99,7 @@ function renderJob(job) {
   jobDetail.textContent = `${count} of at most ${maximum} bounded actions` +
     (job.mutation_started ? " · mutation started" : "");
   cancelJobButton.disabled = job.state === "cancelling";
+  authorizationButtons.hidden = job.state !== "awaiting-user";
 }
 
 function render(status) {
@@ -107,6 +113,10 @@ function render(status) {
     state === "connected" || state === "busy" || state === "authorizing",
   );
   renderJob(status?.job || null);
+  const authorization = status?.authorization || {mode: "plan", decisions: 0};
+  authorizationMode.value = ["manual", "plan", "automatic"].includes(authorization.mode)
+    ? authorization.mode : "plan";
+  decisionCount.textContent = String(Number.isInteger(authorization.decisions) ? authorization.decisions : 0);
 }
 
 function refresh() {
@@ -143,6 +153,18 @@ connectTabButton.addEventListener("click", connectActiveTab);
 cancelJobButton.addEventListener("click", () => {
   cancelJobButton.disabled = true;
   send({type: "cancel-job"}).finally(refresh);
+});
+
+authorizationMode.addEventListener("change", () => {
+  send({type: "set-authorization-mode", mode: authorizationMode.value}).finally(refresh);
+});
+
+approveJobButton.addEventListener("click", () => {
+  send({type: "authorize-current-job", authorized: true}).finally(refresh);
+});
+
+denyJobButton.addEventListener("click", () => {
+  send({type: "authorize-current-job", authorized: false}).finally(refresh);
 });
 
 refresh();

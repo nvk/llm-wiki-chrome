@@ -275,6 +275,146 @@
         "max_argument_bytes": {"type": "integer", "minimum": 256, "maximum": 16384}
       }
     },
+    "extendedAction": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["op", "url"],
+          "properties": {
+            "op": {"enum": ["create_same_origin_tab"]},
+            "url": {"type": "string", "format": "uri", "pattern": "^https://", "maxLength": 16384}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["op", "direction", "expected_url"],
+          "properties": {
+            "op": {"const": "navigate_history"},
+            "direction": {"enum": ["back", "forward"]},
+            "expected_url": {"type": "string", "format": "uri", "pattern": "^https://", "maxLength": 16384}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["op"],
+          "properties": {"op": {"const": "close_target_tab"}}
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["op", "ignore_cache"],
+          "properties": {"op": {"const": "reload_exact_target"}, "ignore_cache": {"type": "boolean"}}
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["op", "locator"],
+          "properties": {
+            "op": {"enum": ["hover_ax", "scroll_ax_into_view"]},
+            "locator": {"$ref": "#/$defs/locator"}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["op", "locator", "destination", "steps"],
+          "properties": {
+            "op": {"const": "drag_ax"}, "locator": {"$ref": "#/$defs/locator"},
+            "destination": {"$ref": "#/$defs/locator"},
+            "steps": {"type": "integer", "minimum": 2, "maximum": 50}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["op", "locator", "option_locator"],
+          "properties": {
+            "op": {"const": "select_ax_option"}, "locator": {"$ref": "#/$defs/locator"},
+            "option_locator": {"$ref": "#/$defs/locator"}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["op", "private_result", "quality", "max_bytes", "x", "y", "width", "height"],
+          "properties": {
+            "op": {"const": "capture_region_private"}, "private_result": {"$ref": "#/$defs/privateField"},
+            "quality": {"type": "integer", "minimum": 10, "maximum": 90},
+            "max_bytes": {"type": "integer", "minimum": 16384, "maximum": 262144},
+            "x": {"type": "number", "minimum": 0, "maximum": 100000},
+            "y": {"type": "number", "minimum": 0, "maximum": 100000},
+            "width": {"type": "number", "minimum": 1, "maximum": 10000},
+            "height": {"type": "number", "minimum": 1, "maximum": 10000}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["op", "private_result", "quality", "max_bytes", "max_width", "max_height"],
+          "properties": {
+            "op": {"const": "capture_full_page_private"}, "private_result": {"$ref": "#/$defs/privateField"},
+            "quality": {"type": "integer", "minimum": 10, "maximum": 90},
+            "max_bytes": {"type": "integer", "minimum": 16384, "maximum": 262144},
+            "max_width": {"type": "integer", "minimum": 1, "maximum": 20000},
+            "max_height": {"type": "integer", "minimum": 1, "maximum": 20000}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["op", "locator", "private_result", "max_items"],
+          "properties": {
+            "op": {"const": "extract_ax_geometry"}, "locator": {"$ref": "#/$defs/locator"},
+            "private_result": {"$ref": "#/$defs/privateField"},
+            "max_items": {"type": "integer", "minimum": 1, "maximum": 500}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["op", "private_result", "max_metrics"],
+          "properties": {
+            "op": {"const": "capture_performance_private"},
+            "private_result": {"$ref": "#/$defs/privateField"},
+            "max_metrics": {"type": "integer", "minimum": 1, "maximum": 100}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["op", "duration_ms"],
+          "properties": {"op": {"const": "wait_duration"}, "duration_ms": {"type": "integer", "minimum": 20, "maximum": 30000}}
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["op", "locator", "slot", "max_files"],
+          "properties": {
+            "op": {"const": "set_private_files"}, "locator": {"$ref": "#/$defs/locator"},
+            "slot": {"$ref": "#/$defs/privateField"},
+            "max_files": {"type": "integer", "minimum": 1, "maximum": 16}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["op", "private_result", "max_items"],
+          "properties": {
+            "op": {"const": "start_download_capture"}, "private_result": {"$ref": "#/$defs/privateField"},
+            "max_items": {"type": "integer", "minimum": 1, "maximum": 16}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["op", "timeout_ms"],
+          "properties": {"op": {"const": "stop_download_capture"}, "timeout_ms": {"type": "integer", "minimum": 100, "maximum": 120000}}
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["op", "accept"],
+          "properties": {
+            "op": {"const": "handle_dialog"}, "accept": {"type": "boolean"},
+            "prompt_slot": {"oneOf": [{"$ref": "#/$defs/privateField"}, {"type": "null"}]}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["op", "broker"],
+          "properties": {
+            "op": {"const": "trigger_credential_broker"},
+            "broker": {"enum": ["onepassword", "browser-password-manager"]}
+          }
+        }
+      ]
+    },
     "action": {
       "oneOf": [
         {"$ref": "#/$defs/plainAction"}, {"$ref": "#/$defs/navigateAction"},
@@ -285,7 +425,8 @@
         {"$ref": "#/$defs/extractAction"}, {"$ref": "#/$defs/scrollCollectionAction"},
         {"$ref": "#/$defs/screenshotAction"},
         {"$ref": "#/$defs/scrollAction"}, {"$ref": "#/$defs/logCaptureAction"},
-        {"$ref": "#/$defs/requestCaptureAction"}, {"$ref": "#/$defs/consoleCaptureAction"}
+        {"$ref": "#/$defs/requestCaptureAction"}, {"$ref": "#/$defs/consoleCaptureAction"},
+        {"$ref": "#/$defs/extendedAction"}
       ]
     }
   }

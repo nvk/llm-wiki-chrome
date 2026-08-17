@@ -32,6 +32,10 @@ TOP_LEVEL_KEYS = {
 ALLOWED_OPERATIONS = {
     "open_or_focus_exact_url",
     "navigate_same_origin",
+    "create_same_origin_tab",
+    "navigate_history",
+    "close_target_tab",
+    "reload_exact_target",
     "assert_exact_target",
     "attach_debugger",
     "detach_debugger",
@@ -42,6 +46,10 @@ ALLOWED_OPERATIONS = {
     "click_ax",
     "click_dom",
     "focus_ax",
+    "hover_ax",
+    "drag_ax",
+    "select_ax_option",
+    "scroll_ax_into_view",
     "dispatch_key_chord",
     "insert_private_text",
     "assert_ax_private_value",
@@ -50,7 +58,17 @@ ALLOWED_OPERATIONS = {
     "extract_ax_collection",
     "collect_ax_by_scrolling",
     "capture_viewport_private",
+    "capture_region_private",
+    "capture_full_page_private",
+    "extract_ax_geometry",
+    "capture_performance_private",
     "scroll_viewport",
+    "wait_duration",
+    "set_private_files",
+    "start_download_capture",
+    "stop_download_capture",
+    "handle_dialog",
+    "trigger_credential_broker",
     "start_log_capture",
     "stop_log_capture",
     "start_request_capture",
@@ -69,7 +87,18 @@ FORBIDDEN_KEYS = {
     "storage",
     "network",
 }
-MUTATION_ONLY = {"insert_private_text", "before_mutation"}
+MUTATION_ONLY = {
+    "insert_private_text",
+    "before_mutation",
+    "drag_ax",
+    "select_ax_option",
+    "set_private_files",
+    "handle_dialog",
+    "trigger_credential_broker",
+    "create_same_origin_tab",
+    "navigate_history",
+    "close_target_tab",
+}
 PUBLIC_RESULT_FIELDS = {
     "status",
     "action_count",
@@ -95,6 +124,10 @@ LOCATOR_KEYS = {
 ACTION_KEYS = {
     "open_or_focus_exact_url": {"op"},
     "navigate_same_origin": {"op", "url"},
+    "create_same_origin_tab": {"op", "url"},
+    "navigate_history": {"op", "direction", "expected_url"},
+    "close_target_tab": {"op"},
+    "reload_exact_target": {"op", "ignore_cache"},
     "assert_exact_target": {"op"},
     "attach_debugger": {"op"},
     "detach_debugger": {"op"},
@@ -108,6 +141,10 @@ ACTION_KEYS = {
     "click_ax": {"op", "locator"},
     "click_dom": {"op", "locator"},
     "focus_ax": {"op", "locator"},
+    "hover_ax": {"op", "locator"},
+    "scroll_ax_into_view": {"op", "locator"},
+    "drag_ax": {"op", "locator", "destination", "steps"},
+    "select_ax_option": {"op", "locator", "option_locator"},
     "dispatch_key_chord": {"op", "keys"},
     "insert_private_text": {"op", "slot", "replace_all"},
     "assert_ax_private_value": {"op", "slot"},
@@ -115,16 +152,55 @@ ACTION_KEYS = {
     "extract_ax": {"op", "locator", "fields", "private_result", "max_items"},
     "extract_ax_collection": {"op", "locator", "fields", "private_result", "max_items"},
     "collect_ax_by_scrolling": {
-        "op", "locator", "fields", "private_result", "max_items", "direction",
-        "distance_px", "max_scrolls", "settle_ms", "dedupe_fields", "stable_rounds",
+        "op",
+        "locator",
+        "fields",
+        "private_result",
+        "max_items",
+        "direction",
+        "distance_px",
+        "max_scrolls",
+        "settle_ms",
+        "dedupe_fields",
+        "stable_rounds",
         "scroll_anchor",
     },
     "capture_viewport_private": {"op", "private_result", "quality", "max_bytes"},
+    "capture_region_private": {
+        "op",
+        "private_result",
+        "quality",
+        "max_bytes",
+        "x",
+        "y",
+        "width",
+        "height",
+    },
+    "capture_full_page_private": {
+        "op",
+        "private_result",
+        "quality",
+        "max_bytes",
+        "max_width",
+        "max_height",
+    },
+    "extract_ax_geometry": {"op", "locator", "private_result", "max_items"},
+    "capture_performance_private": {"op", "private_result", "max_metrics"},
     "scroll_viewport": {"op", "direction", "distance_px"},
+    "wait_duration": {"op", "duration_ms"},
+    "set_private_files": {"op", "locator", "slot", "max_files"},
+    "start_download_capture": {"op", "private_result", "max_items"},
+    "stop_download_capture": {"op", "timeout_ms"},
+    "handle_dialog": {"op", "accept", "prompt_slot"},
+    "trigger_credential_broker": {"op", "broker"},
     "start_log_capture": {"op", "private_result", "max_entries", "max_text_bytes"},
     "start_request_capture": {"op", "private_result", "max_entries", "max_url_bytes"},
     "start_console_capture": {
-        "op", "private_result", "max_entries", "max_arguments", "max_argument_bytes",
+        "op",
+        "private_result",
+        "max_entries",
+        "max_arguments",
+        "max_argument_bytes",
     },
     "first_success": {"op", "branches"},
 }
@@ -135,6 +211,12 @@ LOCATOR_OPERATIONS = {
     "click_ax",
     "click_dom",
     "focus_ax",
+    "hover_ax",
+    "scroll_ax_into_view",
+    "drag_ax",
+    "select_ax_option",
+    "set_private_files",
+    "extract_ax_geometry",
     "extract_ax",
     "extract_ax_collection",
     "collect_ax_by_scrolling",
@@ -151,7 +233,15 @@ AX_IDENTITY_KEYS = {
     "within",
     "within_name_contains_any",
 }
-EXTRACTION_FIELDS = {"name", "role", "value", "description", "url", "checked", "focused"}
+EXTRACTION_FIELDS = {
+    "name",
+    "role",
+    "value",
+    "description",
+    "url",
+    "checked",
+    "focused",
+}
 KEY_NAMES = {
     "platform-primary",
     "control",
@@ -177,7 +267,9 @@ class ProtocolError(ValueError):
 
 
 def canonical_json(value: Any) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
 
 
 def canonical_program_sha256(program: dict[str, Any]) -> str:
@@ -192,7 +284,9 @@ def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], path: str) ->
         raise ProtocolError(f"{path} contains unsupported fields")
 
 
-def _bounded_string(value: Any, path: str, *, pattern: re.Pattern[str] | None = None) -> str:
+def _bounded_string(
+    value: Any, path: str, *, pattern: re.Pattern[str] | None = None
+) -> str:
     if not isinstance(value, str) or not value:
         raise ProtocolError(f"{path} must be a non-empty string")
     if len(value.encode("utf-8")) > MAX_STRING_BYTES:
@@ -222,7 +316,9 @@ def _path_matches_prefix(path: str, prefix: str) -> bool:
     )
 
 
-def iter_actions(actions: list[dict[str, Any]], depth: int = 0) -> Iterator[dict[str, Any]]:
+def iter_actions(
+    actions: list[dict[str, Any]], depth: int = 0
+) -> Iterator[dict[str, Any]]:
     if depth > 4:
         raise ProtocolError("action nesting exceeds four levels")
     for action in actions:
@@ -235,7 +331,9 @@ def iter_actions(actions: list[dict[str, Any]], depth: int = 0) -> Iterator[dict
                 raise ProtocolError("first_success requires one to four branches")
             for branch in branches:
                 if not isinstance(branch, list) or not branch:
-                    raise ProtocolError("first_success branches must be non-empty arrays")
+                    raise ProtocolError(
+                        "first_success branches must be non-empty arrays"
+                    )
                 yield from iter_actions(branch, depth + 1)
         elif branches is not None:
             raise ProtocolError("only first_success may contain branches")
@@ -264,12 +362,7 @@ def _validate_target(target: Any) -> None:
     ):
         raise ProtocolError("target must use an exact HTTPS URL and origin")
     expected_origin = f"{url.scheme}://{url.netloc}"
-    if (
-        raw_origin != expected_origin
-        or origin.path
-        or origin.query
-        or origin.fragment
-    ):
+    if raw_origin != expected_origin or origin.path or origin.query or origin.fragment:
         raise ProtocolError("target origin does not exactly match the target URL")
     collaboration_id = target.get("collaboration_id")
     if not isinstance(collaboration_id, str) or not SHA256.fullmatch(collaboration_id):
@@ -304,7 +397,10 @@ def _validate_navigation_url(raw_url: Any, target: dict[str, Any]) -> None:
         or value.password is not None
         or value.fragment
         or f"{value.scheme}://{value.netloc}" != target["origin"]
-        or not any(_path_matches_prefix(value.path, prefix) for prefix in target["path_prefixes"])
+        or not any(
+            _path_matches_prefix(value.path, prefix)
+            for prefix in target["path_prefixes"]
+        )
     ):
         raise ProtocolError("navigation URL is outside the exact target policy")
 
@@ -338,7 +434,9 @@ def _validate_locator(locator: Any, path: str, depth: int = 0) -> None:
         if (
             not isinstance(roles, list)
             or not 1 <= len(roles) <= 8
-            or not all(isinstance(item, str) and IDENTIFIER.fullmatch(item) for item in roles)
+            or not all(
+                isinstance(item, str) and IDENTIFIER.fullmatch(item) for item in roles
+            )
         ):
             raise ProtocolError(f"{path}.roles must be unique role identifiers")
         if len(roles) != len(set(roles)):
@@ -365,7 +463,10 @@ def _validate_locator(locator: Any, path: str, depth: int = 0) -> None:
             if (
                 not isinstance(items, list)
                 or not 1 <= len(items) <= 12
-                or not all(isinstance(item, str) and item and len(item.encode("utf-8")) <= 512 for item in items)
+                or not all(
+                    isinstance(item, str) and item and len(item.encode("utf-8")) <= 512
+                    for item in items
+                )
             ):
                 raise ProtocolError(f"{path}.{key} must be a bounded string array")
     if "ordinal" in locator and (
@@ -381,7 +482,9 @@ def _validate_locator(locator: Any, path: str, depth: int = 0) -> None:
 
 def _validate_ax_locator_shape(locator: dict[str, Any]) -> None:
     if "selector" in locator or "visible" in locator:
-        raise ProtocolError("AX locators do not accept DOM selector or visibility predicates")
+        raise ProtocolError(
+            "AX locators do not accept DOM selector or visibility predicates"
+        )
     if not AX_IDENTITY_KEYS.intersection(locator):
         raise ProtocolError("AX locators require a semantic identity predicate")
     if "within" in locator:
@@ -390,7 +493,9 @@ def _validate_ax_locator_shape(locator: dict[str, Any]) -> None:
 
 def _validate_dom_locator_shape(locator: dict[str, Any]) -> None:
     if set(locator).difference({"selector", "visible"}) or "selector" not in locator:
-        raise ProtocolError("DOM locators require only a selector and optional visibility")
+        raise ProtocolError(
+            "DOM locators require only a selector and optional visibility"
+        )
 
 
 def _validate_action(
@@ -404,14 +509,32 @@ def _validate_action(
     if operation not in ALLOWED_OPERATIONS:
         raise ProtocolError("program contains an unsupported operation")
     _reject_unknown_keys(action, ACTION_KEYS[operation], f"action[{index}]")
-    if operation == "navigate_same_origin":
+    if operation in {"navigate_same_origin", "create_same_origin_tab"}:
         _validate_navigation_url(action.get("url"), target)
+    if operation == "navigate_history":
+        if action.get("direction") not in {"back", "forward"}:
+            raise ProtocolError("history direction must be back or forward")
+        _validate_navigation_url(action.get("expected_url"), target)
+    if operation == "reload_exact_target" and not isinstance(
+        action.get("ignore_cache"), bool
+    ):
+        raise ProtocolError("reload_exact_target requires ignore_cache")
     if operation in LOCATOR_OPERATIONS:
         _validate_locator(action.get("locator"), f"action[{index}].locator")
         if operation in DOM_LOCATOR_OPERATIONS:
             _validate_dom_locator_shape(action["locator"])
         else:
             _validate_ax_locator_shape(action["locator"])
+    if operation == "drag_ax":
+        _validate_locator(action.get("destination"), f"action[{index}].destination")
+        _validate_ax_locator_shape(action["destination"])
+        if type(action.get("steps")) is not int or not 2 <= action["steps"] <= 50:
+            raise ProtocolError("drag steps are out of bounds")
+    if operation == "select_ax_option":
+        _validate_locator(
+            action.get("option_locator"), f"action[{index}].option_locator"
+        )
+        _validate_ax_locator_shape(action["option_locator"])
     if operation in {"wait_ax", "wait_dom"}:
         timeout = action.get("timeout_ms")
         if type(timeout) is not int or not 50 <= timeout <= 300000:
@@ -426,11 +549,23 @@ def _validate_action(
             raise ProtocolError("key chord is invalid or unbounded")
         if len(keys) != len(set(keys)):
             raise ProtocolError("key chord is invalid or unbounded")
-    if operation in {"insert_private_text", "assert_ax_private_value", "assert_ax_private_sha256"}:
+    if operation in {
+        "insert_private_text",
+        "assert_ax_private_value",
+        "assert_ax_private_sha256",
+        "set_private_files",
+    }:
         if action.get("slot") not in slots:
             raise ProtocolError("action references an undeclared private slot")
-        if operation == "insert_private_text" and not isinstance(action.get("replace_all"), bool):
+        if operation == "insert_private_text" and not isinstance(
+            action.get("replace_all"), bool
+        ):
             raise ProtocolError("insert_private_text requires replace_all")
+        if operation == "set_private_files" and (
+            type(action.get("max_files")) is not int
+            or not 1 <= action["max_files"] <= 16
+        ):
+            raise ProtocolError("file upload max_files is out of bounds")
     if operation in {
         "extract_ax",
         "extract_ax_collection",
@@ -448,7 +583,10 @@ def _validate_action(
         if len(fields) != len(set(fields)):
             raise ProtocolError("extraction fields are invalid")
         private_result = action.get("private_result")
-        if operation != "assert_ax_private_sha256" and private_result not in private_results:
+        if (
+            operation != "assert_ax_private_sha256"
+            and private_result not in private_results
+        ):
             raise ProtocolError("extraction references an undeclared private result")
         max_items = action.get("max_items")
         maximum = 100 if operation == "extract_ax" else 5000
@@ -457,17 +595,64 @@ def _validate_action(
     if operation == "collect_ax_by_scrolling":
         _validate_locator(action.get("scroll_anchor"), f"action[{index}].scroll_anchor")
         _validate_ax_locator_shape(action["scroll_anchor"])
-    if operation == "capture_viewport_private":
+    if operation in {
+        "capture_viewport_private",
+        "capture_region_private",
+        "capture_full_page_private",
+    }:
         if action.get("private_result") not in private_results:
             raise ProtocolError("screenshot references an undeclared private result")
         if type(action.get("quality")) is not int or not 10 <= action["quality"] <= 90:
             raise ProtocolError("screenshot quality is out of bounds")
-        if type(action.get("max_bytes")) is not int or not 16384 <= action["max_bytes"] <= 262144:
+        if (
+            type(action.get("max_bytes")) is not int
+            or not 16384 <= action["max_bytes"] <= 262144
+        ):
             raise ProtocolError("screenshot max_bytes is out of bounds")
+    if operation == "capture_region_private":
+        for key in ("x", "y"):
+            if (
+                type(action.get(key)) not in {int, float}
+                or not 0 <= action[key] <= 100000
+            ):
+                raise ProtocolError("screenshot region origin is out of bounds")
+        for key in ("width", "height"):
+            if (
+                type(action.get(key)) not in {int, float}
+                or not 1 <= action[key] <= 10000
+            ):
+                raise ProtocolError("screenshot region size is out of bounds")
+    if operation == "capture_full_page_private":
+        for key in ("max_width", "max_height"):
+            if type(action.get(key)) is not int or not 1 <= action[key] <= 20000:
+                raise ProtocolError("full-page screenshot dimensions are out of bounds")
+    if operation == "extract_ax_geometry":
+        if action.get("private_result") not in private_results:
+            raise ProtocolError(
+                "geometry extraction references an undeclared private result"
+            )
+        if (
+            type(action.get("max_items")) is not int
+            or not 1 <= action["max_items"] <= 500
+        ):
+            raise ProtocolError("geometry extraction max_items is out of bounds")
+    if operation == "capture_performance_private":
+        if action.get("private_result") not in private_results:
+            raise ProtocolError(
+                "performance capture references an undeclared private result"
+            )
+        if (
+            type(action.get("max_metrics")) is not int
+            or not 1 <= action["max_metrics"] <= 100
+        ):
+            raise ProtocolError("performance max_metrics is out of bounds")
     if operation in {"scroll_viewport", "collect_ax_by_scrolling"}:
         if action.get("direction") not in {"up", "down"}:
             raise ProtocolError("scroll direction must be up or down")
-        if type(action.get("distance_px")) is not int or not 1 <= action["distance_px"] <= 10000:
+        if (
+            type(action.get("distance_px")) is not int
+            or not 1 <= action["distance_px"] <= 10000
+        ):
             raise ProtocolError("scroll distance_px is out of bounds")
     if operation == "collect_ax_by_scrolling":
         max_scrolls = action.get("max_scrolls")
@@ -492,10 +677,47 @@ def _validate_action(
             or not set(dedupe_fields).issubset(fields)
         ):
             raise ProtocolError("scrolling collection dedupe_fields are invalid")
+    if operation == "wait_duration" and (
+        type(action.get("duration_ms")) is not int
+        or not 20 <= action["duration_ms"] <= 30000
+    ):
+        raise ProtocolError("wait duration is out of bounds")
+    if operation == "start_download_capture":
+        if action.get("private_result") not in private_results:
+            raise ProtocolError(
+                "download capture references an undeclared private result"
+            )
+        if (
+            type(action.get("max_items")) is not int
+            or not 1 <= action["max_items"] <= 16
+        ):
+            raise ProtocolError("download capture max_items is out of bounds")
+    if operation == "stop_download_capture":
+        if (
+            type(action.get("timeout_ms")) is not int
+            or not 100 <= action["timeout_ms"] <= 120000
+        ):
+            raise ProtocolError("download capture timeout is out of bounds")
+    if operation == "handle_dialog":
+        if not isinstance(action.get("accept"), bool):
+            raise ProtocolError("dialog action requires accept")
+        slot = action.get("prompt_slot")
+        if slot is not None and slot not in slots:
+            raise ProtocolError("dialog action references an undeclared private slot")
+        if not action["accept"] and slot is not None:
+            raise ProtocolError("dismissed dialogs cannot include prompt text")
+    if operation == "trigger_credential_broker" and action.get("broker") not in {
+        "onepassword",
+        "browser-password-manager",
+    }:
+        raise ProtocolError("credential broker is unsupported")
     if operation == "start_log_capture":
         if action.get("private_result") not in private_results:
             raise ProtocolError("log capture references an undeclared private result")
-        if type(action.get("max_entries")) is not int or not 1 <= action["max_entries"] <= 500:
+        if (
+            type(action.get("max_entries")) is not int
+            or not 1 <= action["max_entries"] <= 500
+        ):
             raise ProtocolError("log capture max_entries is out of bounds")
         if (
             type(action.get("max_text_bytes")) is not int
@@ -504,8 +726,13 @@ def _validate_action(
             raise ProtocolError("log capture max_text_bytes is out of bounds")
     if operation == "start_request_capture":
         if action.get("private_result") not in private_results:
-            raise ProtocolError("request capture references an undeclared private result")
-        if type(action.get("max_entries")) is not int or not 1 <= action["max_entries"] <= 500:
+            raise ProtocolError(
+                "request capture references an undeclared private result"
+            )
+        if (
+            type(action.get("max_entries")) is not int
+            or not 1 <= action["max_entries"] <= 500
+        ):
             raise ProtocolError("request capture max_entries is out of bounds")
         if (
             type(action.get("max_url_bytes")) is not int
@@ -514,8 +741,13 @@ def _validate_action(
             raise ProtocolError("request capture max_url_bytes is out of bounds")
     if operation == "start_console_capture":
         if action.get("private_result") not in private_results:
-            raise ProtocolError("console capture references an undeclared private result")
-        if type(action.get("max_entries")) is not int or not 1 <= action["max_entries"] <= 500:
+            raise ProtocolError(
+                "console capture references an undeclared private result"
+            )
+        if (
+            type(action.get("max_entries")) is not int
+            or not 1 <= action["max_entries"] <= 500
+        ):
             raise ProtocolError("console capture max_entries is out of bounds")
         if (
             type(action.get("max_arguments")) is not int
@@ -587,7 +819,9 @@ def validate_program(program: Any) -> dict[str, Any]:
     if (
         not isinstance(private, list)
         or len(private) > 32
-        or not all(isinstance(item, str) and PRIVATE_FIELD.fullmatch(item) for item in private)
+        or not all(
+            isinstance(item, str) and PRIVATE_FIELD.fullmatch(item) for item in private
+        )
     ):
         raise ProtocolError("private result fields must be named strings")
     if len(private) != len(set(private)):
@@ -596,13 +830,16 @@ def validate_program(program: Any) -> dict[str, Any]:
     private_result_set = set(private)
     for index, action in enumerate(flat):
         _validate_action(action, slot_set, private_result_set, program["target"], index)
-        if action["op"] == "collect_ax_by_scrolling" and action["max_scrolls"] > limits["max_repeat"]:
+        if (
+            action["op"] == "collect_ax_by_scrolling"
+            and action["max_scrolls"] > limits["max_repeat"]
+        ):
             raise ProtocolError("scrolling collection exceeds max_repeat")
     operations = [action["op"] for action in flat]
     top_level_operations = [action.get("op") for action in raw_actions]
     if (
         top_level_operations[0] != "open_or_focus_exact_url"
-        or top_level_operations[-1] != "detach_debugger"
+        or top_level_operations[-1] not in {"detach_debugger", "close_target_tab"}
         or top_level_operations.count("open_or_focus_exact_url") != 1
         or top_level_operations.count("attach_debugger") != 1
         or top_level_operations.count("detach_debugger") != 1
@@ -610,10 +847,18 @@ def validate_program(program: Any) -> dict[str, Any]:
         or operations.count("attach_debugger") != 1
         or operations.count("detach_debugger") != 1
         or operations.index("attach_debugger") >= operations.index("detach_debugger")
+        or (
+            top_level_operations[-1] == "close_target_tab"
+            and top_level_operations[-2] != "detach_debugger"
+        )
     ):
-        raise ProtocolError("program lifecycle must open once, attach once, and detach last")
+        raise ProtocolError(
+            "program lifecycle must open once, attach once, and detach last"
+        )
     boundary_count = operations.count("before_mutation")
-    if capability == "read" and (boundary_count or MUTATION_ONLY.intersection(operations)):
+    if capability == "read" and (
+        boundary_count or MUTATION_ONLY.intersection(operations)
+    ):
         raise ProtocolError("read programs cannot contain mutation actions")
     if capability == "mutation" and (
         boundary_count != 1 or top_level_operations.count("before_mutation") != 1
@@ -621,8 +866,10 @@ def validate_program(program: Any) -> dict[str, Any]:
         raise ProtocolError("mutation programs require exactly one mutation boundary")
     if capability == "mutation":
         boundary_index = top_level_operations.index("before_mutation")
-        if "first_success" in top_level_operations[boundary_index + 1:]:
-            raise ProtocolError("mutation recovery branches must precede the mutation boundary")
+        if "first_success" in top_level_operations[boundary_index + 1 :]:
+            raise ProtocolError(
+                "mutation recovery branches must precede the mutation boundary"
+            )
     log_starts = operations.count("start_log_capture")
     log_stops = operations.count("stop_log_capture")
     if (
@@ -632,7 +879,8 @@ def validate_program(program: Any) -> dict[str, Any]:
         or top_level_operations.count("stop_log_capture") != log_stops
         or (
             log_starts == 1
-            and operations.index("start_log_capture") >= operations.index("stop_log_capture")
+            and operations.index("start_log_capture")
+            >= operations.index("stop_log_capture")
         )
     ):
         raise ProtocolError("private log capture lifecycle is invalid")
@@ -645,7 +893,8 @@ def validate_program(program: Any) -> dict[str, Any]:
         or top_level_operations.count("stop_request_capture") != request_stops
         or (
             request_starts == 1
-            and operations.index("start_request_capture") >= operations.index("stop_request_capture")
+            and operations.index("start_request_capture")
+            >= operations.index("stop_request_capture")
         )
     ):
         raise ProtocolError("private request capture lifecycle is invalid")
@@ -658,22 +907,48 @@ def validate_program(program: Any) -> dict[str, Any]:
         or top_level_operations.count("stop_console_capture") != console_stops
         or (
             console_starts == 1
-            and operations.index("start_console_capture") >= operations.index("stop_console_capture")
+            and operations.index("start_console_capture")
+            >= operations.index("stop_console_capture")
         )
     ):
         raise ProtocolError("private console capture lifecycle is invalid")
+    download_starts = operations.count("start_download_capture")
+    download_stops = operations.count("stop_download_capture")
+    if (
+        download_starts != download_stops
+        or download_starts > 1
+        or top_level_operations.count("start_download_capture") != download_starts
+        or top_level_operations.count("stop_download_capture") != download_stops
+        or (
+            download_starts == 1
+            and operations.index("start_download_capture")
+            >= operations.index("stop_download_capture")
+        )
+    ):
+        raise ProtocolError("private download capture lifecycle is invalid")
     extracted = {
         action["private_result"]
         for action in flat
-        if action["op"] in {
-            "extract_ax", "extract_ax_collection", "collect_ax_by_scrolling",
-            "capture_viewport_private", "start_log_capture",
+        if action["op"]
+        in {
+            "extract_ax",
+            "extract_ax_collection",
+            "collect_ax_by_scrolling",
+            "capture_viewport_private",
+            "start_log_capture",
             "start_request_capture",
             "start_console_capture",
+            "capture_region_private",
+            "capture_full_page_private",
+            "extract_ax_geometry",
+            "capture_performance_private",
+            "start_download_capture",
         }
     }
     if extracted != private_result_set:
-        raise ProtocolError("private result declarations must exactly match extraction actions")
+        raise ProtocolError(
+            "private result declarations must exactly match extraction actions"
+        )
     expected = program["program_sha256"]
     if expected != canonical_program_sha256(program):
         raise ProtocolError("program_sha256 does not match the canonical program")
