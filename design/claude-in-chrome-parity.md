@@ -36,7 +36,7 @@ browser planner into this repository.
 | Screenshots / visual context | Bounded private viewport JPEG, no automatic model upload | Implemented in source; consumer parity pending |
 | Scroll long pages and virtualized lists | Bounded typed scroll plus deduplicating AX collection on the exact tab | Live generic-tab scroll passed; X provider adoption pending |
 | Browser log entries | Paired, bounded exact-tab CDP Log window with private-only scalar results | Implemented in source; live-browser gate pending |
-| Multiple tabs | Up to 16 individually clicked active-tab grants; each job remains exact-target | Implemented in source; live-browser gate pending |
+| Multiple tabs | Up to 16 individually clicked active-tab grants; each job remains exact-target | Live two-origin routing gate passed |
 | Request debugging | Paired exact-tab request metadata capture without queries, headers, bodies, cookies, IDs, or interception | Implemented in source; live-browser gate pending |
 | Console API debugging | Paired exact-tab `Runtime.consoleAPICalled` capture with bounded scalar-only arguments and no evaluation or object dereferencing | Implemented in source; live-browser gate pending |
 | Downloads and uploads | Registered file roots, typed operations, provider verification | Later explicit effect capability |
@@ -79,8 +79,11 @@ attempt was blocked before Chrome startup by the current local sandbox's macOS
 Mach-service policy. A separate manual live gate has now passed: one explicitly
 clicked public HTTPS tab was the only grant returned to the agent, a bounded AX
 snapshot completed, and a bounded viewport scroll returned a successful
-five-action receipt. The isolated harness and targeted-adapter shadow runs
-remain pending; this source state has not been released as an upgrade.
+five-action receipt. A subsequent two-tab gate also passed: both distinct HTTPS
+grants produced independent snapshots, a scroll routed only to the selected
+second grant, and both collaboration IDs remained stable afterward. The
+isolated harness and targeted-adapter shadow runs remain pending; this source
+state has not been released as an upgrade.
 
 Arbitrary sites, tab groups, downloads/uploads, recording, schedules, and
 notifications are separate review events rather than
