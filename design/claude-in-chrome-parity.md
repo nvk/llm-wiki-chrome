@@ -25,16 +25,16 @@ browser planner into this repository.
 
 | Claude-in-Chrome capability | Executor target | Status / gate |
 |---|---|---|
-| Read page structure, text, and link metadata | Bounded DOM and accessibility queries with private extraction | Implemented in source; provider parity pending |
+| Read page structure, text, and link metadata | Bounded DOM and accessibility queries with private extraction | Live generic-tab snapshot passed; provider parity pending |
 | Click and focus controls | Typed DOM/AX actions on the exact tab | Implemented in source; provider parity pending |
 | Type and fill forms | Private slots, focused insertion, exact-value assertions | Implemented in source; provider parity pending |
 | Navigate websites | Exact URL plus reviewed same-origin paths | Implemented in source; provider parity pending |
-| Terminal/Desktop bridge | Stable Native Messaging host and private Unix socket | Foundation complete |
-| Side-panel status | Content-free connector/job state only | Foundation complete |
-| Direct agent tool surface | MCP tools for readiness, clicked-tab list, snapshot, screenshot, semantic click/type/key, and scroll | Implemented in source; live-session gate pending |
+| Terminal/Desktop bridge | Stable Native Messaging host and private Unix socket | Live exact-tab bridge passed |
+| Side-panel status | Content-free connector/job state only | Live connected-state gate passed |
+| Direct agent tool surface | MCP tools for readiness, clicked-tab list, snapshot, screenshot, semantic click/type/key, and scroll | Live readiness, tab-list, snapshot, and scroll gates passed |
 | Controlled-tab highlighting | Fixed green page outline/pill and per-tab `ON` action badge | Implemented in source; live-session gate pending |
 | Screenshots / visual context | Bounded private viewport JPEG, no automatic model upload | Implemented in source; consumer parity pending |
-| Scroll long pages and virtualized lists | Bounded typed scroll plus deduplicating AX collection on the exact tab | Implemented in source; X provider adoption pending |
+| Scroll long pages and virtualized lists | Bounded typed scroll plus deduplicating AX collection on the exact tab | Live generic-tab scroll passed; X provider adoption pending |
 | Browser log entries | Paired, bounded exact-tab CDP Log window with private-only scalar results | Implemented in source; live-browser gate pending |
 | Multiple tabs | Up to 16 individually clicked active-tab grants; each job remains exact-target | Implemented in source; live-browser gate pending |
 | Request debugging | Paired exact-tab request metadata capture without queries, headers, bodies, cookies, IDs, or interception | Implemented in source; live-browser gate pending |
@@ -76,9 +76,11 @@ ready to load a temporary unpacked copy, open a runtime-supplied exact approved
 target, and prove real `chrome.tabs`, `chrome.debugger`, CDP screenshot,
 cleanup, and private-result handling while returning only counters. The first
 attempt was blocked before Chrome startup by the current local sandbox's macOS
-Mach-service policy, so a successful real-browser result remains pending in an
-allowed local test profile. Live targeted-adapter shadow runs remain the next
-gate; this source state has not been released or installed as an upgrade.
+Mach-service policy. A separate manual live gate has now passed: one explicitly
+clicked public HTTPS tab was the only grant returned to the agent, a bounded AX
+snapshot completed, and a bounded viewport scroll returned a successful
+five-action receipt. The isolated harness and targeted-adapter shadow runs
+remain pending; this source state has not been released as an upgrade.
 
 Arbitrary sites, tab groups, downloads/uploads, recording, schedules, and
 notifications are separate review events rather than
