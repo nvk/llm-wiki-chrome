@@ -73,6 +73,7 @@ class AdapterAndSecurityTests(unittest.TestCase):
         self.assertNotIn("chrome.tabs.query({})", source)
         self.assertEqual(source.count("chrome.sidePanel.open"), 1)
         self.assertIn("chrome.action.onClicked.addListener", source)
+        self.assertIn("LLM Wiki for Chrome controls this tab", source)
 
     @unittest.skipUnless(shutil.which("node"), "Node is required for the MV3 contract check")
     def test_service_worker_independently_validates_signed_programs(self) -> None:

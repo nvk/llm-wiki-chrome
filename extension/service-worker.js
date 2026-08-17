@@ -144,7 +144,7 @@ async function persistWorkspace(workspace, removed = []) {
     if (chrome.action?.setTitle) {
       await chrome.action.setTitle({
         tabId: value.tab_id,
-        title: "LLM Wiki agent controls this tab",
+        title: "LLM Wiki for Chrome controls this tab",
       }).catch(() => {});
     }
   }
