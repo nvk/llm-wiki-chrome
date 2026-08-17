@@ -60,27 +60,32 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ProtocolError, "program_sha256"):
             validate_program(program)
 
-    def test_target_origin_path_and_fragment_are_exact(self) -> None:
+    def test_target_collaboration_origin_and_path_are_exact(self) -> None:
         variants = []
         base = load_fixture("x-space-read-v1.json")
         wrong_origin = copy.deepcopy(base)
         wrong_origin["target"]["origin"] = "https://example.invalid"
         variants.append(wrong_origin)
-        unreviewed_origin = copy.deepcopy(base)
-        unreviewed_origin["target"]["url"] = "https://example.invalid/synthetic"
-        unreviewed_origin["target"]["origin"] = "https://example.invalid"
-        unreviewed_origin["target"]["path_prefixes"] = ["/synthetic"]
-        variants.append(unreviewed_origin)
         wrong_path = copy.deepcopy(base)
         wrong_path["target"]["path_prefixes"] = ["/unrelated/"]
         variants.append(wrong_path)
-        fragment = copy.deepcopy(base)
-        fragment["target"]["url"] += "#fragment"
-        variants.append(fragment)
+        missing_collaboration = copy.deepcopy(base)
+        del missing_collaboration["target"]["collaboration_id"]
+        variants.append(missing_collaboration)
+        invalid_collaboration = copy.deepcopy(base)
+        invalid_collaboration["target"]["collaboration_id"] = "not-a-grant"
+        variants.append(invalid_collaboration)
         for program in variants:
             resign(program)
             with self.assertRaises(ProtocolError):
                 validate_program(program)
+
+        user_exposed_origin = copy.deepcopy(base)
+        user_exposed_origin["target"]["url"] = "https://example.invalid/synthetic#section"
+        user_exposed_origin["target"]["origin"] = "https://example.invalid"
+        user_exposed_origin["target"]["path_prefixes"] = ["/synthetic"]
+        resign(user_exposed_origin)
+        self.assertEqual(validate_program(user_exposed_origin), user_exposed_origin)
 
     def test_same_origin_navigation_is_bounded_to_target_paths(self) -> None:
         program = load_fixture("x-space-read-v1.json")

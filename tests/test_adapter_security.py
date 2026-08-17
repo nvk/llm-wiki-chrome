@@ -23,11 +23,8 @@ class AdapterAndSecurityTests(unittest.TestCase):
         self.assertEqual(manifest["version"], extension["version"])
         self.assertNotIn("content_scripts", extension)
         self.assertEqual(extension["background"]["type"], "module")
-        self.assertNotIn("<all_urls>", extension["host_permissions"])
-        self.assertEqual(set(extension["host_permissions"]), {
-            "https://docs.google.com/*",
-            "https://x.com/*",
-        })
+        self.assertEqual(extension["host_permissions"], [])
+        self.assertIn("activeTab", extension["permissions"])
 
     def test_service_worker_has_no_arbitrary_execution_or_provider_ui_logic(self) -> None:
         source = "\n".join(
@@ -102,6 +99,7 @@ validateProgram(program).then(() => {
         self.assertNotIn("textarea", html.lower())
         self.assertNotIn("innerHTML", script)
         self.assertIn("never displays page or job content", html)
+        self.assertIn("Stop collaboration", html)
 
     def test_describe_matches_manifest(self) -> None:
         manifest = json.loads((ROOT / ".llm-wiki-adapter.json").read_text(encoding="utf-8"))

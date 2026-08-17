@@ -7,6 +7,7 @@ import socket
 import time
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from .protocol import BROWSER_PROTOCOL, ProtocolError, validate_program
 from .storage import StorageError, native_socket_path, validate_private_socket
@@ -15,6 +16,7 @@ MAX_MESSAGE_BYTES = 1_048_576
 MAX_PRIVATE_VALUE_BYTES = 16_384
 MAX_PRIVATE_VALUES_BYTES = 262_144
 ERROR_CODE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+COLLABORATION_ID = re.compile(r"^[a-f0-9]{64}$")
 RESULT_KEYS = {"protocol", "type", "job_id", "status", "public", "private", "error"}
 
 
@@ -121,6 +123,64 @@ class BrowserExecutorClient:
     def __init__(self, socket_path: Path | None = None, timeout_seconds: int = 300) -> None:
         self.socket_path = (socket_path or native_socket_path()).resolve(strict=False)
         self.timeout_seconds = max(10, min(timeout_seconds, 300))
+
+    def current_collaboration(self) -> dict[str, str] | None:
+        """Return the exact user-exposed HTTPS target, or None when no tab is shared."""
+        try:
+            validate_private_socket(self.socket_path)
+        except StorageError as exc:
+            raise ClientError("browser executor connector is offline or not private") from exc
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(min(5.0, float(self.timeout_seconds)))
+        try:
+            try:
+                connection.connect(str(self.socket_path))
+            except OSError as exc:
+                raise ClientError("browser executor connector is unavailable") from exc
+            _send_line(connection, {
+                "protocol": BROWSER_PROTOCOL,
+                "type": "collaboration-query",
+            })
+            message = _receive_line(connection, bytearray())
+        finally:
+            connection.close()
+        if message.get("type") != "collaboration-status" or message.get("state") not in {
+            "active", "inactive",
+        }:
+            raise ClientError("browser executor returned invalid collaboration state")
+        if message["state"] == "inactive":
+            if set(message) != {"protocol", "type", "state"}:
+                raise ClientError("browser executor returned invalid collaboration state")
+            return None
+        if set(message) != {
+            "protocol", "type", "state", "collaboration_id", "url", "origin",
+        }:
+            raise ClientError("browser executor returned invalid collaboration state")
+        collaboration_id = message.get("collaboration_id")
+        raw_url = message.get("url")
+        raw_origin = message.get("origin")
+        if (
+            not isinstance(collaboration_id, str)
+            or not COLLABORATION_ID.fullmatch(collaboration_id)
+            or not isinstance(raw_url, str)
+            or not isinstance(raw_origin, str)
+            or len(raw_url.encode("utf-8")) > MAX_PRIVATE_VALUE_BYTES
+        ):
+            raise ClientError("browser executor returned invalid collaboration state")
+        url = urlsplit(raw_url)
+        if (
+            url.scheme != "https"
+            or not url.hostname
+            or url.username is not None
+            or url.password is not None
+            or raw_origin != f"{url.scheme}://{url.netloc}"
+        ):
+            raise ClientError("browser executor returned invalid collaboration state")
+        return {
+            "collaboration_id": collaboration_id,
+            "url": raw_url,
+            "origin": raw_origin,
+        }
 
     def run(
         self,

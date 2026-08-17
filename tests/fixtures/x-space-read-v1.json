@@ -1,14 +1,15 @@
 {
   "protocol": "llm-wiki-browser-executor/v1",
   "program_id": "synthetic-x-space-read-v1",
-  "program_sha256": "ee10a217f2caa9e701dc2b9c6ca38a33e2fe9fcbacea036319754466c42d83fd",
+  "program_sha256": "f57bff1191febf375a2507350dede7b06b80d16b761f48b4571cb0405fa6c36d",
   "plan_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "driver": {"id": "x-space-read", "version": "spike-1"},
   "capability": "read",
   "target": {
     "url": "https://x.com/i/spaces/SYNTHETIC_SPACE",
     "origin": "https://x.com",
-    "path_prefixes": ["/i/spaces/SYNTHETIC_SPACE"]
+    "path_prefixes": ["/i/spaces/SYNTHETIC_SPACE"],
+    "collaboration_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
   },
   "limits": {"timeout_ms": 60000, "max_actions": 40, "max_repeat": 6},
   "private_slots": [],

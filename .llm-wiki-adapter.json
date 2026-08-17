@@ -8,6 +8,7 @@
   "capabilities": [
     "browser-executor-protocol-validation",
     "browser-executor-native-messaging",
+    "browser-executor-active-tab-collaboration",
     "browser-executor-typed-dom-ax-execution",
     "browser-executor-governed-mutation-boundary",
     "browser-executor-content-free-status"

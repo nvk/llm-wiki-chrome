@@ -26,13 +26,14 @@
     "target": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["url", "origin", "path_prefixes"],
+      "required": ["url", "origin", "path_prefixes", "collaboration_id"],
       "properties": {
         "url": {
           "type": "string", "format": "uri",
-          "pattern": "^https://(?:docs\\.google\\.com|x\\.com)(?:/|$)"
+          "pattern": "^https://"
         },
-        "origin": {"enum": ["https://docs.google.com", "https://x.com"]},
+        "origin": {"type": "string", "format": "uri", "pattern": "^https://"},
+        "collaboration_id": {"$ref": "#/$defs/sha256"},
         "path_prefixes": {
           "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true,
           "items": {"type": "string", "pattern": "^/", "maxLength": 2048}

@@ -33,6 +33,40 @@ def send_line(connection: socket.socket, value: dict) -> None:
 
 
 class ClientTests(unittest.TestCase):
+    def collaboration_server(self, response: dict):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "executor.sock"
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            server.bind(str(path))
+            path.chmod(0o600)
+            server.listen(1)
+            failure: list[BaseException] = []
+
+            def serve() -> None:
+                try:
+                    connection, _ = server.accept()
+                    with connection:
+                        request = receive_line(connection)
+                        self.assertEqual(request, {
+                            "protocol": BROWSER_PROTOCOL,
+                            "type": "collaboration-query",
+                        })
+                        send_line(connection, response)
+                except BaseException as exc:
+                    failure.append(exc)
+                finally:
+                    server.close()
+
+            thread = threading.Thread(target=serve, daemon=True)
+            thread.start()
+            try:
+                result = BrowserExecutorClient(path, timeout_seconds=10).current_collaboration()
+            finally:
+                thread.join(timeout=2)
+            if failure:
+                raise failure[0]
+            return result
+
     def run_server(
         self,
         program: dict,
@@ -86,6 +120,28 @@ class ClientTests(unittest.TestCase):
         result = self.run_server(program, handler)
         self.assertEqual(result["status"], "ok")
         self.assertEqual(set(result["private"]), {"space.attendees", "space.metadata"})
+
+    def test_current_collaboration_returns_only_the_exact_private_target(self) -> None:
+        result = self.collaboration_server({
+            "protocol": BROWSER_PROTOCOL,
+            "type": "collaboration-status",
+            "state": "active",
+            "collaboration_id": "d" * 64,
+            "url": "https://example.invalid/private?synthetic=1",
+            "origin": "https://example.invalid",
+        })
+        self.assertEqual(result, {
+            "collaboration_id": "d" * 64,
+            "url": "https://example.invalid/private?synthetic=1",
+            "origin": "https://example.invalid",
+        })
+
+    def test_current_collaboration_can_be_inactive(self) -> None:
+        self.assertIsNone(self.collaboration_server({
+            "protocol": BROWSER_PROTOCOL,
+            "type": "collaboration-status",
+            "state": "inactive",
+        }))
 
     def test_mutation_requires_and_crosses_one_callback_boundary(self) -> None:
         program = fixture("google-docs-suggestions-v1.json")

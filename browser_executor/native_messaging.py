@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shlex
 import socket
 import struct
@@ -13,6 +14,7 @@ import tempfile
 import threading
 from pathlib import Path
 from typing import Any, BinaryIO
+from urllib.parse import urlsplit
 
 from .protocol import BROWSER_PROTOCOL
 from .storage import ensure_private_directory, ensure_socket_parent, native_socket_path, state_root, write_private_json
@@ -21,6 +23,7 @@ NATIVE_HOST_NAME = "net.llmwiki.browser_execution"
 NATIVE_HOST_SCHEMA = "llm-wiki-browser-native-host/v1"
 EXTENSION_ORIGIN_PREFIX = "chrome-extension://"
 MAX_MESSAGE_BYTES = 1_048_576
+COLLABORATION_ID = re.compile(r"^[a-f0-9]{64}$")
 
 
 class NativeMessagingError(RuntimeError):
@@ -210,6 +213,43 @@ def _valid_extension_origin(value: str) -> bool:
     return len(extension_id) == 32 and all(character in "abcdefghijklmnop" for character in extension_id)
 
 
+def _validate_collaboration_update(value: dict[str, Any]) -> dict[str, Any] | None:
+    base = {"protocol", "type", "state"}
+    if value.get("type") != "collaboration" or value.get("state") not in {"active", "inactive"}:
+        raise NativeMessagingError("extension collaboration state is invalid")
+    if value["state"] == "inactive":
+        if set(value) != base:
+            raise NativeMessagingError("inactive collaboration state contains extra fields")
+        return None
+    if set(value) != base | {"collaboration_id", "url", "origin"}:
+        raise NativeMessagingError("active collaboration state has an invalid shape")
+    collaboration_id = value.get("collaboration_id")
+    raw_url = value.get("url")
+    raw_origin = value.get("origin")
+    if (
+        not isinstance(collaboration_id, str)
+        or not COLLABORATION_ID.fullmatch(collaboration_id)
+        or not isinstance(raw_url, str)
+        or not isinstance(raw_origin, str)
+        or len(raw_url.encode("utf-8")) > 16_384
+    ):
+        raise NativeMessagingError("active collaboration state is invalid")
+    url = urlsplit(raw_url)
+    if (
+        url.scheme != "https"
+        or not url.hostname
+        or url.username is not None
+        or url.password is not None
+        or raw_origin != f"{url.scheme}://{url.netloc}"
+    ):
+        raise NativeMessagingError("active collaboration target is invalid")
+    return {
+        "collaboration_id": collaboration_id,
+        "url": raw_url,
+        "origin": raw_origin,
+    }
+
+
 class NativeRelay:
     """Relay one local targeted-adapter connection to the shared extension."""
 
@@ -221,6 +261,8 @@ class NativeRelay:
         self.agent_lock = threading.Lock()
         self.agent: socket.socket | None = None
         self.server: socket.socket | None = None
+        self.collaboration_lock = threading.Lock()
+        self.collaboration: dict[str, Any] | None = None
 
     def _write_extension(self, value: dict[str, Any]) -> None:
         with self.output_lock:
@@ -233,6 +275,27 @@ class NativeRelay:
         with self.agent_lock:
             if self.agent is not None:
                 self.agent.sendall(payload + b"\n")
+
+    def _collaboration_status(self) -> dict[str, Any]:
+        with self.collaboration_lock:
+            current = dict(self.collaboration) if self.collaboration is not None else None
+        if current is None:
+            return {
+                "protocol": BROWSER_PROTOCOL,
+                "type": "collaboration-status",
+                "state": "inactive",
+            }
+        return {
+            "protocol": BROWSER_PROTOCOL,
+            "type": "collaboration-status",
+            "state": "active",
+            **current,
+        }
+
+    def _update_collaboration(self, value: dict[str, Any]) -> None:
+        current = _validate_collaboration_update(value)
+        with self.collaboration_lock:
+            self.collaboration = current
 
     def _handle_agent(self, connection: socket.socket) -> None:
         with self.agent_lock:
@@ -264,6 +327,16 @@ class NativeRelay:
                     if not isinstance(value, dict) or value.get("protocol") != BROWSER_PROTOCOL:
                         raise NativeMessagingError("agent relay protocol is invalid")
                     message_type = value.get("type")
+                    if job_id is None and message_type == "collaboration-query":
+                        if set(value) != {"protocol", "type"}:
+                            raise NativeMessagingError("collaboration query has an invalid shape")
+                        payload = json.dumps(
+                            self._collaboration_status(),
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                        connection.sendall(payload + b"\n")
+                        return
                     incoming_job_id = value.get("job_id")
                     valid_job_id = (
                         isinstance(incoming_job_id, str)
@@ -325,6 +398,16 @@ class NativeRelay:
                         "type": "error",
                         "error": "extension protocol does not match native host",
                     })
+                    continue
+                if value.get("type") == "collaboration":
+                    try:
+                        self._update_collaboration(value)
+                    except NativeMessagingError:
+                        self._write_extension({
+                            "protocol": BROWSER_PROTOCOL,
+                            "type": "error",
+                            "error": "extension collaboration state is invalid",
+                        })
                     continue
                 self._write_agent(value)
         finally:

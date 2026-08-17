@@ -89,7 +89,7 @@ function keyDefinition(name, platform) {
 }
 
 export class BrowserExecutor {
-  constructor({chromeApi, platform = "unknown", isCancelled = () => false}) {
+  constructor({chromeApi, platform = "unknown", isCancelled = () => false, targetTabId = null}) {
     this.chrome = chromeApi;
     this.platform = platform;
     this.isCancelled = isCancelled;
@@ -97,6 +97,7 @@ export class BrowserExecutor {
     this.privateValues = {};
     this.privateResults = {};
     this.tabId = null;
+    this.targetTabId = Number.isInteger(targetTabId) ? targetTabId : null;
     this.expectedUrl = null;
     this.attached = false;
     this.actionCount = 0;
@@ -187,6 +188,24 @@ export class BrowserExecutor {
 
   async openOrFocus() {
     if (this.tabId !== null) fail("target-already-opened");
+    if (this.targetTabId !== null) {
+      let tab;
+      try {
+        tab = await this.chrome.tabs.get(this.targetTabId);
+        if (tab.url !== this.expectedUrl && tab.pendingUrl !== this.expectedUrl) {
+          fail("collaboration-target-drift");
+        }
+        this.tabId = this.targetTabId;
+        await this.chrome.windows.update(tab.windowId, {focused: true});
+        await this.chrome.tabs.update(this.tabId, {active: true});
+        await this.waitForTab(this.expectedUrl);
+      } catch (error) {
+        if (error instanceof ExecutionError) throw error;
+        fail("collaboration-target-lost");
+      }
+      await this.assertExactTarget();
+      return;
+    }
     let tabs;
     try {
       tabs = await this.chrome.tabs.query({url: [`${this.program.target.origin}/*`]});

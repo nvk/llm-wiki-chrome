@@ -8,7 +8,6 @@ from typing import Any, Iterator
 from urllib.parse import urlsplit
 
 BROWSER_PROTOCOL = "llm-wiki-browser-executor/v1"
-APPROVED_ORIGINS = {"https://docs.google.com", "https://x.com"}
 IDENTIFIER = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
 PROGRAM_IDENTIFIER = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$")
@@ -242,7 +241,11 @@ def iter_actions(actions: list[dict[str, Any]], depth: int = 0) -> Iterator[dict
 def _validate_target(target: Any) -> None:
     if not isinstance(target, dict):
         raise ProtocolError("target must be an object")
-    _reject_unknown_keys(target, {"url", "origin", "path_prefixes"}, "target")
+    _reject_unknown_keys(
+        target,
+        {"url", "origin", "path_prefixes", "collaboration_id"},
+        "target",
+    )
     raw_url = target.get("url")
     raw_origin = target.get("origin")
     if not isinstance(raw_url, str) or not isinstance(raw_origin, str):
@@ -255,18 +258,19 @@ def _validate_target(target: Any) -> None:
         or not url.hostname
         or url.username is not None
         or url.password is not None
-        or url.fragment
     ):
         raise ProtocolError("target must use an exact HTTPS URL and origin")
     expected_origin = f"{url.scheme}://{url.netloc}"
     if (
         raw_origin != expected_origin
-        or raw_origin not in APPROVED_ORIGINS
         or origin.path
         or origin.query
         or origin.fragment
     ):
         raise ProtocolError("target origin does not exactly match the target URL")
+    collaboration_id = target.get("collaboration_id")
+    if not isinstance(collaboration_id, str) or not SHA256.fullmatch(collaboration_id):
+        raise ProtocolError("target requires an exact active collaboration id")
     prefixes = target.get("path_prefixes")
     if not isinstance(prefixes, list) or not prefixes:
         raise ProtocolError("target requires at least one path prefix")

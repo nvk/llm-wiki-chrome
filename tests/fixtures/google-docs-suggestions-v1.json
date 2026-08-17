@@ -1,14 +1,15 @@
 {
   "protocol": "llm-wiki-browser-executor/v1",
   "program_id": "synthetic-google-docs-suggestions-v1",
-  "program_sha256": "2c09c74a4ddfe5db13fe206119a56edf98040583d0e574a4489d8bbb24b200c3",
+  "program_sha256": "59584ae8b737da01e8d6e30539766338407f7c5fca4fcd8af74d203e1e0a6acb",
   "plan_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "driver": {"id": "google-docs-suggestions", "version": "spike-1"},
   "capability": "mutation",
   "target": {
     "url": "https://docs.google.com/document/d/SYNTHETIC_DOCUMENT/edit",
     "origin": "https://docs.google.com",
-    "path_prefixes": ["/document/d/SYNTHETIC_DOCUMENT/"]
+    "path_prefixes": ["/document/d/SYNTHETIC_DOCUMENT/"],
+    "collaboration_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   },
   "limits": {"timeout_ms": 120000, "max_actions": 100, "max_repeat": 8},
   "private_slots": ["edit.find", "edit.replace"],

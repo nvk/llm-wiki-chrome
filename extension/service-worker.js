@@ -7,7 +7,9 @@ import {BrowserExecutor, ExecutionError} from "./executor.mjs";
 
 const NATIVE_HOST = "net.llmwiki.browser_execution";
 const CONNECTOR_STATE_KEY = "nativeConnectorState";
+const COLLABORATION_STATE_KEY = "activeCollaboration";
 const JOB_ID = /^[a-f0-9]{36}$/u;
+const COLLABORATION_ID = /^[a-f0-9]{64}$/u;
 const ERROR_CODE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
 
 let nativePort = null;
@@ -25,9 +27,109 @@ async function setConnectorState(state, detail = "") {
   await chrome.storage.session.set({
     [CONNECTOR_STATE_KEY]: {state, detail: String(detail || "").slice(0, 240)},
   });
-  const healthy = new Set(["connected", "busy", "authorizing"]).has(state);
-  await chrome.action.setBadgeText({text: healthy ? "" : "!"});
-  await chrome.action.setBadgeBackgroundColor({color: "#C53030"});
+}
+
+function collaborationId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function validateCollaboration(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      !hasExactKeys(value, ["collaboration_id", "tab_id", "window_id", "url", "origin"]) ||
+      !COLLABORATION_ID.test(value.collaboration_id) || !Number.isInteger(value.tab_id) ||
+      !Number.isInteger(value.window_id) || typeof value.url !== "string" ||
+      value.url.length > 16384 || typeof value.origin !== "string") return null;
+  try {
+    const url = new URL(value.url);
+    if (url.protocol !== "https:" || url.username || url.password || url.origin !== value.origin) {
+      return null;
+    }
+  } catch (_error) {
+    return null;
+  }
+  return value;
+}
+
+async function publishCollaboration(value) {
+  if (!nativePort) return;
+  if (!value) {
+    sendThrough(nativePort, {type: "collaboration", state: "inactive"});
+    return;
+  }
+  sendThrough(nativePort, {
+    type: "collaboration",
+    state: "active",
+    collaboration_id: value.collaboration_id,
+    url: value.url,
+    origin: value.origin,
+  });
+}
+
+async function revokeCollaboration() {
+  const stored = await chrome.storage.session.get(COLLABORATION_STATE_KEY);
+  const prior = validateCollaboration(stored[COLLABORATION_STATE_KEY]);
+  await chrome.storage.session.set({[COLLABORATION_STATE_KEY]: null});
+  if (prior) await chrome.action.setBadgeText({tabId: prior.tab_id, text: ""}).catch(() => {});
+  await publishCollaboration(null).catch(() => {});
+}
+
+async function currentCollaboration() {
+  const stored = await chrome.storage.session.get(COLLABORATION_STATE_KEY);
+  const value = validateCollaboration(stored[COLLABORATION_STATE_KEY]);
+  if (!value) return null;
+  try {
+    const tab = await chrome.tabs.get(value.tab_id);
+    if (tab.windowId !== value.window_id || tab.url !== value.url) {
+      await revokeCollaboration();
+      return null;
+    }
+  } catch (_error) {
+    await revokeCollaboration();
+    return null;
+  }
+  return value;
+}
+
+async function startCollaboration(tab) {
+  const panel = Number.isInteger(tab?.id) ? chrome.sidePanel.open({tabId: tab.id}) : Promise.resolve();
+  let url;
+  try {
+    url = new URL(tab?.url || "");
+  } catch (_error) {
+    await revokeCollaboration();
+    await panel.catch(() => {});
+    return;
+  }
+  if (!Number.isInteger(tab.id) || !Number.isInteger(tab.windowId) || url.protocol !== "https:" ||
+      url.username || url.password || tab.url.length > 16384) {
+    await revokeCollaboration();
+    await panel.catch(() => {});
+    return;
+  }
+  const prior = await currentCollaboration();
+  if (prior && prior.tab_id !== tab.id) {
+    await chrome.action.setBadgeText({tabId: prior.tab_id, text: ""}).catch(() => {});
+  }
+  const value = {
+    collaboration_id: collaborationId(),
+    tab_id: tab.id,
+    window_id: tab.windowId,
+    url: tab.url,
+    origin: url.origin,
+  };
+  await chrome.storage.session.set({[COLLABORATION_STATE_KEY]: value});
+  await chrome.action.setBadgeBackgroundColor({tabId: tab.id, color: "#317258"});
+  await chrome.action.setBadgeText({tabId: tab.id, text: "ON"});
+  await publishCollaboration(value).catch(() => {});
+  await panel.catch(() => {});
+}
+
+async function collaborationForProgram(program) {
+  const value = await currentCollaboration();
+  if (!value || value.collaboration_id !== program.target.collaboration_id ||
+      value.url !== program.target.url || value.origin !== program.target.origin) return null;
+  return value;
 }
 
 function sendThrough(port, value) {
@@ -158,6 +260,15 @@ async function executeJob(message, port) {
     return;
   }
 
+  const collaboration = await collaborationForProgram(program);
+  if (!collaboration) {
+    sendThrough(port, {
+      type: "result", job_id: jobId, status: "error", public: {}, private: {},
+      error: "collaboration-required",
+    });
+    return;
+  }
+
   let platformInfo;
   try {
     platformInfo = await chrome.runtime.getPlatformInfo();
@@ -179,6 +290,7 @@ async function executeJob(message, port) {
     chromeApi: chrome,
     platform: platformInfo.os,
     isCancelled: () => job.cancelled,
+    targetTabId: collaboration.tab_id,
   });
   job.executor = executor;
   activeJob = job;
@@ -230,6 +342,7 @@ async function handleNativeMessage(message, port) {
       throw new Error("invalid-ready-message");
     }
     await setConnectorState("connected");
+    await publishCollaboration(await currentCollaboration()).catch(() => {});
     return;
   }
   if (message.type === "mutation-authorized") {
@@ -245,18 +358,53 @@ async function handleNativeMessage(message, port) {
 
 async function configureExtension() {
   connectNativeBridge();
-  await chrome.sidePanel.setPanelBehavior({openPanelOnActionClick: true});
+  await publishCollaboration(await currentCollaboration()).catch(() => {});
 }
 
 chrome.runtime.onInstalled.addListener(configureExtension);
 chrome.runtime.onStartup.addListener(configureExtension);
 configureExtension().catch(() => {});
 
+chrome.action.onClicked.addListener((tab) => {
+  startCollaboration(tab).catch(() => {
+    setConnectorState("error", "Could not expose the selected HTTPS tab.").catch(() => {});
+  });
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (typeof changeInfo.url !== "string") return;
+  currentCollaboration().then((value) => {
+    if (value && value.tab_id === tabId && value.url !== changeInfo.url) {
+      return revokeCollaboration();
+    }
+    return undefined;
+  }).catch(() => {});
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  currentCollaboration().then((value) => {
+    if (value && value.tab_id === tabId) return revokeCollaboration();
+    return undefined;
+  }).catch(() => {});
+});
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "stop-collaboration") {
+    revokeCollaboration().then(() => sendResponse({stopped: true})).catch(() => {
+      sendResponse({stopped: false});
+    });
+    return true;
+  }
   if (!message || message.type !== "get-status") return false;
   if (!nativePort) connectNativeBridge();
-  chrome.storage.session.get(CONNECTOR_STATE_KEY).then((stored) => {
-    sendResponse(stored[CONNECTOR_STATE_KEY] || {state: "offline", detail: "Connector starting."});
+  Promise.all([
+    chrome.storage.session.get(CONNECTOR_STATE_KEY),
+    currentCollaboration(),
+  ]).then(([stored, collaboration]) => {
+    sendResponse({
+      connector: stored[CONNECTOR_STATE_KEY] || {state: "offline", detail: "Connector starting."},
+      collaboration: {state: collaboration ? "active" : "inactive"},
+    });
   });
   return true;
 });

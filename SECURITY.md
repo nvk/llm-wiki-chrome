@@ -4,15 +4,22 @@ This private repository contains code for a bounded local browser executor. It
 does not make browser automation safe by itself and is not an authorization
 boundary for provider effects.
 
-Every job must be bound to an approved plan hash, exact HTTPS target, explicit
-read or mutation capability, fixed driver version, bounded action count, and
-deadline. The targeted adapter remains responsible for provider authorization,
+Every job must be bound to a user-created active-tab collaboration ID, approved
+plan hash, exact HTTPS target, explicit read or mutation capability, fixed
+driver version, bounded action count, and deadline. The targeted adapter remains responsible for provider authorization,
 pre-mutation state checks, durable pending journals, idempotency, and independent
 read-back verification.
 
+The extension has no persistent host permissions. Clicking its action creates a
+fresh temporary grant for the exact active tab through Chrome's `activeTab`
+permission. The extension and private native relay keep that grant in session
+memory, revoke it on navigation or close, and never display its URL in the side
+panel. A local targeted adapter may retrieve the exact target only through the
+private user-owned socket.
+
 The extension independently validates the signed program and private-slot
-shape. The Python and extension validators both reject origins outside the same
-explicit production allowlist. The extension activates one exact tab, aborts on
+shape. It accepts an HTTPS origin only when the program's collaboration ID,
+exact URL, and origin match the live user grant. The extension activates that exact tab, aborts on
 target or focus drift, uses only a
 hardcoded DOM/Accessibility/Input/Page/Log/Network/Runtime CDP allowlist, and detaches the debugger
 in a `finally` path. Waits retry only locator-not-ready conditions; cancellation,
@@ -46,7 +53,7 @@ property access are absent from the fixed CDP method allowlist. The listener
 and Runtime domain are removed during failure cleanup.
 
 This design deliberately excludes arbitrary JavaScript, `Runtime.evaluate`, raw
-CDP method names, ambient tab enumeration, page-authored actions, broad origins,
+CDP method names, ambient tab enumeration, page-authored actions, persistent host access,
 and post-boundary fallback branches that could duplicate provider effects.
 
 Never commit or log real resources, browser content, cookies, credentials,

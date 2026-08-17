@@ -102,6 +102,7 @@ class CrossLanguageProtocolTests(unittest.TestCase):
             "url": "https://example.invalid/synthetic",
             "origin": "https://example.invalid",
             "path_prefixes": ["/synthetic"],
+            "collaboration_id": "e" * 64,
         }
         cases.append(resign(unreviewed))
 
@@ -146,7 +147,7 @@ class CrossLanguageProtocolTests(unittest.TestCase):
         self.assertEqual(extension_decisions, python_decisions)
         self.assertEqual(
             python_decisions,
-            [True, True, True, True, True, True, True, False, False, False, False, False],
+            [True, True, True, True, True, True, True, False, True, False, False, False],
         )
 
 

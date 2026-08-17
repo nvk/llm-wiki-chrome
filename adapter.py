@@ -48,6 +48,7 @@ def synthetic_program() -> dict[str, Any]:
             "url": "https://x.com/i/spaces/SYNTHETIC_SELF_TEST",
             "origin": "https://x.com",
             "path_prefixes": ["/i/spaces/SYNTHETIC_SELF_TEST"],
+            "collaboration_id": "f" * 64,
         },
         "limits": {"timeout_ms": 1000, "max_actions": 4, "max_repeat": 1},
         "private_slots": [],

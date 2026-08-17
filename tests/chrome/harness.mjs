@@ -24,6 +24,7 @@ async function run() {
       url: targetUrl,
       origin: target.origin,
       path_prefixes: [target.pathname],
+      collaboration_id: "d".repeat(64),
     },
     limits: {timeout_ms: 30000, max_actions: 16, max_repeat: 3},
     private_slots: [],

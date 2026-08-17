@@ -14,8 +14,8 @@ class EventHook {
     this.listeners.push(listener);
   }
 
-  emit(value) {
-    for (const listener of this.listeners) listener(value);
+  emit(...values) {
+    for (const listener of this.listeners) listener(...values);
   }
 }
 
@@ -51,7 +51,13 @@ class NativePort {
 
 const nativePort = new NativePort();
 const stored = {};
-let tab = null;
+let tab = {
+  id: 1,
+  windowId: 1,
+  url: "https://x.com/i/spaces/SYNTHETIC_SPACE",
+  active: true,
+  status: "complete",
+};
 let attached = false;
 
 globalThis.chrome = {
@@ -64,8 +70,9 @@ globalThis.chrome = {
   action: {
     setBadgeText: async () => {},
     setBadgeBackgroundColor: async () => {},
+    onClicked: new EventHook(),
   },
-  sidePanel: {setPanelBehavior: async () => {}},
+  sidePanel: {open: async () => {}},
   runtime: {
     connectNative: () => nativePort,
     getPlatformInfo: async () => ({os: "mac"}),
@@ -75,6 +82,8 @@ globalThis.chrome = {
     lastError: null,
   },
   tabs: {
+    onUpdated: new EventHook(),
+    onRemoved: new EventHook(),
     query: async (query) => {
       assert.deepEqual(query, {url: ["https://x.com/*"]});
       return tab ? [structuredClone(tab)] : [];
@@ -125,6 +134,13 @@ globalThis.chrome = {
 
 await import("../../extension/service-worker.js");
 nativePort.onMessage.emit({protocol: PROTOCOL, type: "ready"});
+chrome.action.onClicked.emit(structuredClone(tab));
+while (!stored.activeCollaboration) {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+assert.equal(stored.activeCollaboration.url, tab.url);
+assert.match(stored.activeCollaboration.collaboration_id, /^[a-f0-9]{64}$/u);
+await nativePort.next((message) => message.type === "collaboration" && message.state === "active");
 
 async function program(capability) {
   const actions = [
@@ -144,6 +160,7 @@ async function program(capability) {
       url: "https://x.com/i/spaces/SYNTHETIC_SPACE",
       origin: "https://x.com",
       path_prefixes: ["/i/spaces/SYNTHETIC_SPACE"],
+      collaboration_id: stored.activeCollaboration.collaboration_id,
     },
     limits: {timeout_ms: 5000, max_actions: 10, max_repeat: 2},
     private_slots: [],
@@ -213,5 +230,28 @@ const invalidResult = await nativePort.next((message) => message.type === "resul
 assert.equal(invalidResult.status, "error");
 assert.equal(invalidResult.error, "invalid-program");
 assert.deepEqual(invalidResult.public, {});
+
+const wrongGrant = structuredClone(readProgram);
+wrongGrant.target.collaboration_id = "f".repeat(64);
+wrongGrant.program_sha256 = await canonicalProgramHash(wrongGrant);
+const wrongGrantStart = nativePort.sent.length;
+nativePort.onMessage.emit({
+  protocol: PROTOCOL,
+  type: "job",
+  job_id: JOB_ID,
+  program: wrongGrant,
+  private_values: {},
+});
+const wrongGrantResult = await nativePort.next(
+  (message) => message.type === "result",
+  wrongGrantStart,
+);
+assert.equal(wrongGrantResult.error, "collaboration-required");
+
+chrome.tabs.onUpdated.emit(tab.id, {url: `${tab.url}?drift=1`});
+tab.url = `${tab.url}?drift=1`;
+await new Promise((resolve) => setTimeout(resolve, 0));
+await new Promise((resolve) => setTimeout(resolve, 0));
+assert.equal(stored.activeCollaboration, null);
 
 process.stdout.write("ok\n");

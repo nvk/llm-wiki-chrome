@@ -145,6 +145,14 @@ def run_e2e(chrome_binary: Path, chromedriver_binary: Path, target_url: str) -> 
         temporary_path = Path(temporary)
         extension_dir = temporary_path / "extension"
         shutil.copytree(ROOT / "extension", extension_dir)
+        # The isolated harness cannot synthesize a Chrome toolbar user gesture.
+        # Grant only its exact test origin in the temporary extension copy; the
+        # production manifest remains activeTab-only with no host permissions.
+        test_manifest_path = extension_dir / "manifest.json"
+        test_manifest = json.loads(test_manifest_path.read_text(encoding="utf-8"))
+        target = urlsplit(target_url)
+        test_manifest["host_permissions"] = [f"{target.scheme}://{target.netloc}/*"]
+        test_manifest_path.write_text(json.dumps(test_manifest), encoding="utf-8")
         for name in ("harness.html", "harness.mjs"):
             shutil.copy2(ROOT / "tests" / "chrome" / name, extension_dir / name)
 

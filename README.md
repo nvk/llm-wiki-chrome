@@ -10,6 +10,40 @@ access, or direct end-user routes. Provider-specific adapters still own routing,
 authentication, planning, selectors, journals, recovery, idempotency, and final
 read-back verification.
 
+## Click-to-collaborate flow
+
+The extension does not need persistent site access or per-page Chrome host
+registration. The user opens an HTTPS page and clicks the extension action.
+That Chrome user gesture creates a fresh ephemeral collaboration grant bound to
+the exact tab, URL, and origin. The grant is revoked when the tab navigates,
+closes, or the user chooses **Stop collaboration**.
+
+Targeted adapters retrieve the active grant through the private native socket,
+compile it into an exact typed program, and fail closed if the grant or page has
+changed. The click authorizes exposing that page to bounded adapter reads; it
+does not authorize an arbitrary write. Mutation jobs still require the exact
+approved plan hash, the one-shot pre-mutation boundary, provider-specific
+preconditions, and independent read-back verification.
+
+Adapter code still has to be installed and trusted once. The collaboration
+grant replaces per-resource registration and provider OAuth only for workflows
+that can inspect and verify through the browser UI. A targeted adapter may keep
+a first-party API as an optional stronger verification path.
+
+Provider adapters use the private client directly:
+
+```python
+from browser_executor.client import BrowserExecutorClient
+
+executor = BrowserExecutorClient()
+collaboration = executor.current_collaboration()
+if collaboration is None:
+    raise RuntimeError("click the extension on the target page")
+
+# Bind collaboration_id, url, and origin into the signed typed program.
+result = executor.run(program, private_values=private_values)
+```
+
 ## Development status
 
 The current development branch extends the `0.0.1` foundation with the first
@@ -18,6 +52,7 @@ bounded execution slice:
 - strict program hashing and validation;
 - cross-language policy-decision tests for the Python client and MV3 validator;
 - exact HTTPS target and bounded action declarations;
+- click-created active-tab grants with no persistent host permissions;
 - separate read and mutation capabilities;
 - one governed mutation callback in the Python client;
 - stable extension identity and exact native-host origin;
@@ -62,10 +97,11 @@ possible.
 
 ```text
 targeted adapter
+  -> retrieve exact user-created active-tab collaboration
   -> deterministic typed program + exact approved plan hash
   -> BrowserExecutorClient over a private Unix socket
   -> allowlisted Native Messaging host
-  -> shared MV3 extension on one exact approved origin
+  -> shared MV3 extension on the exact user-exposed tab
   -> one-shot before-mutation challenge when required
   -> private result slots returned only to the targeted adapter
 ```
@@ -118,11 +154,12 @@ copy are not part of the test suite and require explicit user direction.
 
 ## Security model
 
-The executor validates a canonical program hash, approved plan hash, fixed
-driver identity/version, exact target, capability, limits, action vocabulary,
+The executor validates a canonical program hash, approved plan hash, active
+collaboration ID, fixed driver identity/version, exact target, capability, limits, action vocabulary,
 private slots, and result allowlist independently in Python and the extension.
-Production permissions are limited to explicitly reviewed origins; there is no
-`<all_urls>` access or content script. The interpreter has a fixed CDP method
+There are no persistent host permissions, `<all_urls>` access, or content
+scripts; Chrome's `activeTab` grant is created only by the user's extension
+click. The interpreter has a fixed CDP method
 allowlist and does not accept `Runtime.evaluate`, raw methods, scripts, or
 page-generated actions.
 

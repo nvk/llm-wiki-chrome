@@ -1,5 +1,4 @@
 export const BROWSER_PROTOCOL = "llm-wiki-browser-executor/v1";
-export const APPROVED_ORIGINS = new Set(["https://docs.google.com", "https://x.com"]);
 
 const ALLOWED_OPERATIONS = new Set([
   "open_or_focus_exact_url", "navigate_same_origin", "assert_exact_target",
@@ -232,8 +231,8 @@ function assertPolicyUrl(rawUrl, target, initial = false) {
     throw new Error("A browser URL is invalid.");
   }
   const url = new URL(rawUrl);
-  if (url.protocol !== "https:" || url.username || url.password || url.hash ||
-      url.origin !== target.origin || !APPROVED_ORIGINS.has(url.origin) ||
+  if (url.protocol !== "https:" || url.username || url.password || (url.hash && !initial) ||
+      url.origin !== target.origin ||
       !target.path_prefixes.some((prefix) => pathMatchesPrefix(url.pathname, prefix)) ||
       (initial && rawUrl !== target.url)) {
     throw new Error("The browser URL is outside the exact target policy.");
@@ -356,7 +355,14 @@ export async function validateProgram(program) {
   if (!validIdentifier(program.driver.id, true) || !validIdentifier(program.driver.version)) {
     throw new Error("The browser driver identity is invalid.");
   }
-  rejectUnknownKeys(program.target, new Set(["url", "origin", "path_prefixes"]), "The browser target");
+  rejectUnknownKeys(
+    program.target,
+    new Set(["url", "origin", "path_prefixes", "collaboration_id"]),
+    "The browser target",
+  );
+  if (!/^[a-f0-9]{64}$/.test(program.target.collaboration_id || "")) {
+    throw new Error("The browser target requires an active collaboration id.");
+  }
   if (!Array.isArray(program.target.path_prefixes) || program.target.path_prefixes.length < 1 ||
       program.target.path_prefixes.length > 8 ||
       new Set(program.target.path_prefixes).size !== program.target.path_prefixes.length ||
