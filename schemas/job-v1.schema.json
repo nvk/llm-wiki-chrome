@@ -107,7 +107,7 @@
     "plainAction": {
       "type": "object", "additionalProperties": false, "required": ["op"],
       "properties": {
-        "op": {"enum": ["open_or_focus_exact_url", "assert_exact_target", "attach_debugger", "detach_debugger", "stop_log_capture", "before_mutation"]}
+        "op": {"enum": ["open_or_focus_exact_url", "assert_exact_target", "attach_debugger", "detach_debugger", "stop_log_capture", "stop_request_capture", "before_mutation"]}
       }
     },
     "navigateAction": {
@@ -239,6 +239,16 @@
         "max_text_bytes": {"type": "integer", "minimum": 256, "maximum": 16384}
       }
     },
+    "requestCaptureAction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["op", "private_result", "max_entries", "max_url_bytes"],
+      "properties": {
+        "op": {"const": "start_request_capture"},
+        "private_result": {"$ref": "#/$defs/privateField"},
+        "max_entries": {"type": "integer", "minimum": 1, "maximum": 500},
+        "max_url_bytes": {"type": "integer", "minimum": 256, "maximum": 16384}
+      }
+    },
     "action": {
       "oneOf": [
         {"$ref": "#/$defs/plainAction"}, {"$ref": "#/$defs/navigateAction"},
@@ -247,7 +257,8 @@
         {"$ref": "#/$defs/keyAction"}, {"$ref": "#/$defs/privateAction"},
         {"$ref": "#/$defs/extractAction"}, {"$ref": "#/$defs/scrollCollectionAction"},
         {"$ref": "#/$defs/screenshotAction"},
-        {"$ref": "#/$defs/scrollAction"}, {"$ref": "#/$defs/logCaptureAction"}
+        {"$ref": "#/$defs/scrollAction"}, {"$ref": "#/$defs/logCaptureAction"},
+        {"$ref": "#/$defs/requestCaptureAction"}
       ]
     }
   }

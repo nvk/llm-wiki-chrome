@@ -150,7 +150,8 @@ class FakeChrome {
 
   command(method, parameters) {
     if (["DOM.enable", "DOM.disable", "Accessibility.enable", "Accessibility.disable",
-      "Page.enable", "Page.disable", "Log.disable", "DOM.scrollIntoViewIfNeeded"].includes(method)) return {};
+      "Page.enable", "Page.disable", "Log.disable", "Network.disable",
+      "DOM.scrollIntoViewIfNeeded"].includes(method)) return {};
     if (method === "Log.enable") {
       this.debugger.onEvent.emit(
         {tabId: this.tab.id},
@@ -159,6 +160,57 @@ class FakeChrome {
           source: "javascript", level: "warning", text: "Synthetic browser diagnostic",
           timestamp: 1234, url: "https://x.com/i/spaces/SYNTHETIC_SPACE", lineNumber: 7,
         }},
+      );
+      return {};
+    }
+    if (method === "Network.enable") {
+      this.debugger.onEvent.emit(
+        {tabId: this.tab.id},
+        "Network.requestWillBeSent",
+        {
+          requestId: "synthetic-request-1",
+          request: {
+            url: "https://x.com/synthetic/api?private=discarded",
+            method: "GET",
+            headers: {authorization: "not-retained"},
+            postData: "not-retained",
+          },
+          type: "Fetch",
+          timestamp: 2000,
+          initiator: {type: "script", stack: {callFrames: [{url: "not-retained"}]}},
+        },
+      );
+      this.debugger.onEvent.emit(
+        {tabId: this.tab.id},
+        "Network.responseReceived",
+        {
+          requestId: "synthetic-request-1",
+          response: {
+            status: 204,
+            mimeType: "application/json",
+            fromDiskCache: false,
+            headers: {"set-cookie": "not-retained"},
+          },
+        },
+      );
+      this.debugger.onEvent.emit(
+        {tabId: this.tab.id},
+        "Network.requestWillBeSent",
+        {
+          requestId: "synthetic-request-2",
+          request: {url: "https://x.com/synthetic/failure", method: "POST"},
+          type: "XHR",
+          timestamp: 2001,
+        },
+      );
+      this.debugger.onEvent.emit(
+        {tabId: this.tab.id},
+        "Network.loadingFailed",
+        {
+          requestId: "synthetic-request-2",
+          errorText: "net::ERR_FAILED",
+          canceled: true,
+        },
       );
       return {};
     }
@@ -383,6 +435,43 @@ async function browserLogProgram() {
   return validateProgram(program);
 }
 
+async function requestCaptureProgram() {
+  const program = {
+    protocol: "llm-wiki-browser-executor/v1",
+    program_id: "synthetic-request-capture-v1",
+    program_sha256: "0".repeat(64),
+    plan_sha256: "2".repeat(64),
+    driver: {id: "synthetic-driver", version: "0.0.1"},
+    capability: "read",
+    target: {
+      url: "https://x.com/i/spaces/SYNTHETIC_SPACE",
+      origin: "https://x.com",
+      path_prefixes: ["/i/spaces/SYNTHETIC_SPACE"],
+    },
+    limits: {timeout_ms: 5000, max_actions: 8, max_repeat: 2},
+    private_slots: [],
+    actions: [
+      {op: "open_or_focus_exact_url"},
+      {op: "attach_debugger"},
+      {
+        op: "start_request_capture",
+        private_result: "page.requests",
+        max_entries: 10,
+        max_url_bytes: 1024,
+      },
+      {op: "assert_exact_target"},
+      {op: "stop_request_capture"},
+      {op: "detach_debugger"},
+    ],
+    result: {
+      public_fields: ["status", "action_count", "private_result_count"],
+      private_fields: ["page.requests"],
+    },
+  };
+  program.program_sha256 = await canonicalProgramHash(program);
+  return validateProgram(program);
+}
+
 async function testReadExecutionAndPrivateExtraction() {
   const program = await validateProgram(loadFixture("x-space-read-v1.json"));
   const fake = new FakeChrome(program.target.url, "read");
@@ -481,6 +570,70 @@ async function testPrivateBrowserLogCaptureIsBoundedAndCleanedUp() {
   assert.equal(fake.attached, false);
 }
 
+async function testPrivateRequestCaptureDropsSensitivePayloadsAndCleansUp() {
+  const program = await requestCaptureProgram();
+  const fake = new FakeChrome(program.target.url, "read");
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  const result = await executor.run(program, {}, async () => false);
+  assert.deepEqual(result.private["page.requests"], {
+    entries: [
+      {
+        method: "GET",
+        url: "https://x.com/synthetic/api",
+        resource_type: "Fetch",
+        timestamp: 2000,
+        status: 204,
+        mime_type: "application/json",
+        from_disk_cache: false,
+        failed: false,
+        error_text: null,
+        canceled: false,
+      },
+      {
+        method: "POST",
+        url: "https://x.com/synthetic/failure",
+        resource_type: "XHR",
+        timestamp: 2001,
+        status: null,
+        mime_type: null,
+        from_disk_cache: false,
+        failed: true,
+        error_text: "net::ERR_FAILED",
+        canceled: true,
+      },
+    ],
+    truncated: false,
+  });
+  assert.equal(JSON.stringify(result.private).includes("not-retained"), false);
+  assert.equal(JSON.stringify(result.private).includes("private=discarded"), false);
+  assert.equal(fake.debugger.onEvent.listeners.length, 0);
+  assert.equal(fake.attached, false);
+}
+
+async function testInvalidPrivateRequestFailsClosedAndCleansUp() {
+  const program = await requestCaptureProgram();
+  const fake = new FakeChrome(program.target.url, "read");
+  const original = fake.command.bind(fake);
+  fake.command = (method, parameters) => {
+    if (method === "Network.enable") {
+      fake.debugger.onEvent.emit(
+        {tabId: fake.tab.id},
+        "Network.requestWillBeSent",
+        {requestId: "synthetic-invalid", request: {url: "not a URL", method: "GET"}, type: "Fetch"},
+      );
+      return {};
+    }
+    return original(method, parameters);
+  };
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  await assert.rejects(
+    executor.run(program, {}, async () => false),
+    (error) => error instanceof ExecutionError && error.code === "private-request-invalid",
+  );
+  assert.equal(fake.debugger.onEvent.listeners.length, 0);
+  assert.equal(fake.attached, false);
+}
+
 async function testMutationDenialFailsClosed() {
   const program = await mutationProgram();
   const fake = new FakeChrome(program.target.url, "mutation");
@@ -534,6 +687,8 @@ await testPrivateViewportCapture();
 await testViewportScrollAndPrivateLinkMetadata();
 await testScrollingCollectionDeduplicatesAndStopsAtBound();
 await testPrivateBrowserLogCaptureIsBoundedAndCleanedUp();
+await testPrivateRequestCaptureDropsSensitivePayloadsAndCleansUp();
+await testInvalidPrivateRequestFailsClosedAndCleansUp();
 await testMutationDenialFailsClosed();
 await testTargetDriftIsNotRetried();
 await testCancellationFailsClosed();

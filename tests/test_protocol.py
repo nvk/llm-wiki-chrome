@@ -291,6 +291,47 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ProtocolError, "lifecycle"):
             validate_program(missing_stop)
 
+    def test_private_request_capture_is_paired_and_bounded(self) -> None:
+        program = load_fixture("x-space-read-v1.json")
+        program["actions"].insert(3, {
+            "op": "start_request_capture",
+            "private_result": "space.requests",
+            "max_entries": 50,
+            "max_url_bytes": 4096,
+        })
+        program["actions"].insert(-1, {"op": "stop_request_capture"})
+        program["result"]["private_fields"].append("space.requests")
+        resign(program)
+        self.assertEqual(validate_program(program), program)
+
+        for change in (
+            {"max_entries": 501},
+            {"max_url_bytes": 255},
+            {"max_entries": True},
+        ):
+            invalid = copy.deepcopy(program)
+            start = next(
+                action for action in invalid["actions"]
+                if action["op"] == "start_request_capture"
+            )
+            start.update(change)
+            resign(invalid)
+            with self.subTest(change=change), self.assertRaises(ProtocolError):
+                validate_program(invalid)
+
+        nested_stop = copy.deepcopy(program)
+        nested_stop["actions"] = [
+            action for action in nested_stop["actions"]
+            if action["op"] != "stop_request_capture"
+        ]
+        nested_stop["actions"].insert(-1, {
+            "op": "first_success",
+            "branches": [[{"op": "stop_request_capture"}]],
+        })
+        resign(nested_stop)
+        with self.assertRaisesRegex(ProtocolError, "lifecycle"):
+            validate_program(nested_stop)
+
     def test_nested_branches_are_bounded(self) -> None:
         program = load_fixture("x-space-read-v1.json")
         nested = {"op": "first_success", "branches": [[{"op": "assert_exact_target"}]]}

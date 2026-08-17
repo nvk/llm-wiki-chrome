@@ -47,6 +47,18 @@ class AdapterAndSecurityTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertNotIn(value, source)
         self.assertIn("new BrowserExecutor", source)
+        self.assertIn('"Network.enable"', source)
+        self.assertIn('"Network.disable"', source)
+        for diagnostic_method in (
+            "Network.getResponseBody",
+            "Network.getRequestPostData",
+            "Network.setRequestInterception",
+            "Network.setExtraHTTPHeaders",
+            "Fetch.enable",
+            "Runtime.consoleAPICalled",
+        ):
+            with self.subTest(diagnostic_method=diagnostic_method):
+                self.assertNotIn(diagnostic_method, source)
         self.assertIn('error: "invalid-program"', source)
         self.assertNotIn("typed-execution-disabled", source)
 

@@ -7,6 +7,7 @@ const ALLOWED_CDP_METHODS = new Set([
   "DOM.querySelector", "DOM.scrollIntoViewIfNeeded", "Input.dispatchKeyEvent",
   "Input.dispatchMouseEvent", "Input.insertText", "Page.disable", "Page.enable",
   "Page.captureScreenshot", "Log.disable", "Log.enable",
+  "Network.disable", "Network.enable",
 ]);
 const RETRYABLE_WAIT_CODES = new Set([
   "element-not-found", "element-state-mismatch", "element-ambiguous", "target-not-ready",
@@ -92,6 +93,7 @@ export class BrowserExecutor {
     this.actionCount = 0;
     this.mutationStarted = false;
     this.logCapture = null;
+    this.requestCapture = null;
     this.deadline = 0;
   }
 
@@ -114,6 +116,7 @@ export class BrowserExecutor {
         private: this.privateResults,
       };
     } finally {
+      if (this.requestCapture) await this.stopRequestCapture(true);
       if (this.logCapture) await this.stopLogCapture(true);
       if (this.attached) await this.detachDebugger(true);
     }
@@ -160,6 +163,8 @@ export class BrowserExecutor {
       scroll_viewport: () => this.scrollViewport(action),
       start_log_capture: () => this.startLogCapture(action),
       stop_log_capture: () => this.stopLogCapture(false),
+      start_request_capture: () => this.startRequestCapture(action),
+      stop_request_capture: () => this.stopRequestCapture(false),
       before_mutation: () => this.beforeMutation(),
     };
     const handler = handlers[action.op];
@@ -639,6 +644,170 @@ export class BrowserExecutor {
       await this.command("Log.disable", {});
     } catch (_error) {
       if (!bestEffort) fail("log-capture-cleanup-failed");
+    }
+    if (bestEffort) return;
+    if (capture.failed) fail(capture.failed);
+    this.privateResults[capture.privateResult] = {
+      entries: capture.entries,
+      truncated: capture.truncated,
+    };
+    this.assertPrivateResultsBounded(capture.privateResult);
+  }
+
+  requestCaptureFits(capture) {
+    const value = {entries: capture.entries, truncated: capture.truncated};
+    return new TextEncoder().encode(JSON.stringify(value)).length <= MAX_PRIVATE_RESULTS_BYTES;
+  }
+
+  privateRequestUrl(rawUrl, maximumBytes) {
+    if (typeof rawUrl !== "string") fail("private-request-invalid");
+    let url;
+    try {
+      url = new URL(rawUrl);
+    } catch (_error) {
+      fail("private-request-invalid");
+    }
+    if (!["http:", "https:"].includes(url.protocol)) return null;
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    const value = url.href;
+    if (new TextEncoder().encode(value).length > maximumBytes) return null;
+    return value;
+  }
+
+  handleRequestEvent(source, method, parameters) {
+    const capture = this.requestCapture;
+    if (!capture || source?.tabId !== this.tabId || ![
+      "Network.requestWillBeSent", "Network.responseReceived", "Network.loadingFailed",
+    ].includes(method)) return;
+    const requestId = parameters?.requestId;
+    if (typeof requestId !== "string" || !requestId ||
+        new TextEncoder().encode(requestId).length > 512) {
+      capture.failed = "private-request-invalid";
+      return;
+    }
+    try {
+      if (method === "Network.requestWillBeSent") {
+        const request = parameters.request;
+        const url = this.privateRequestUrl(request?.url, capture.maxUrlBytes);
+        if (url === null) {
+          capture.truncated = true;
+          return;
+        }
+        if (typeof request.method !== "string" || !/^[A-Z]{1,32}$/u.test(request.method) ||
+            typeof parameters.type !== "string" ||
+            new TextEncoder().encode(parameters.type).length > 64) {
+          capture.failed = "private-request-invalid";
+          return;
+        }
+        if (capture.entries.length >= capture.maxEntries) {
+          capture.truncated = true;
+          return;
+        }
+        const row = {
+          method: request.method,
+          url,
+          resource_type: parameters.type,
+          timestamp: this.safeExtractedValue(parameters.timestamp),
+          status: null,
+          mime_type: null,
+          from_disk_cache: false,
+          failed: false,
+          error_text: null,
+          canceled: false,
+        };
+        capture.entries.push(row);
+        if (!this.requestCaptureFits(capture)) {
+          capture.entries.pop();
+          capture.truncated = true;
+          return;
+        }
+        capture.byRequestId.set(requestId, capture.entries.length - 1);
+        return;
+      }
+      const index = capture.byRequestId.get(requestId);
+      if (!Number.isInteger(index)) return;
+      const row = capture.entries[index];
+      const prior = structuredClone(row);
+      if (method === "Network.responseReceived") {
+        const response = parameters.response;
+        if (!response || typeof response !== "object" ||
+            typeof response.status !== "number" || !Number.isFinite(response.status) ||
+            response.status < 0 || response.status > 999 ||
+            typeof response.mimeType !== "string" ||
+            new TextEncoder().encode(response.mimeType).length > 1024 ||
+            typeof response.fromDiskCache !== "boolean") {
+          capture.failed = "private-request-invalid";
+          return;
+        }
+        row.status = response.status;
+        row.mime_type = response.mimeType;
+        row.from_disk_cache = response.fromDiskCache;
+      } else {
+        const errorText = parameters.errorText;
+        if (typeof errorText !== "string" ||
+            new TextEncoder().encode(errorText).length > capture.maxUrlBytes ||
+            (parameters.canceled !== undefined && typeof parameters.canceled !== "boolean")) {
+          capture.failed = "private-request-invalid";
+          return;
+        }
+        row.failed = true;
+        row.error_text = errorText;
+        row.canceled = parameters.canceled === true;
+      }
+      if (!this.requestCaptureFits(capture)) {
+        capture.entries[index] = prior;
+        capture.truncated = true;
+      }
+    } catch (_error) {
+      capture.failed = "private-request-invalid";
+    }
+  }
+
+  async startRequestCapture(action) {
+    if (!this.attached || this.requestCapture || !this.chrome.debugger?.onEvent?.addListener) {
+      fail("request-capture-state-invalid");
+    }
+    const capture = {
+      privateResult: action.private_result,
+      maxEntries: action.max_entries,
+      maxUrlBytes: action.max_url_bytes,
+      entries: [],
+      byRequestId: new Map(),
+      truncated: false,
+      failed: null,
+      listener: null,
+    };
+    capture.listener = (source, method, parameters) => this.handleRequestEvent(source, method, parameters);
+    this.requestCapture = capture;
+    this.chrome.debugger.onEvent.addListener(capture.listener);
+    try {
+      await this.command("Network.enable", {});
+    } catch (error) {
+      this.chrome.debugger.onEvent.removeListener(capture.listener);
+      this.requestCapture = null;
+      throw error;
+    }
+  }
+
+  async stopRequestCapture(bestEffort) {
+    const capture = this.requestCapture;
+    if (!capture) {
+      if (bestEffort) return;
+      fail("request-capture-state-invalid");
+    }
+    this.requestCapture = null;
+    try {
+      this.chrome.debugger.onEvent.removeListener(capture.listener);
+    } catch (_error) {
+      if (!bestEffort) fail("request-capture-cleanup-failed");
+    }
+    try {
+      await this.command("Network.disable", {});
+    } catch (_error) {
+      if (!bestEffort) fail("request-capture-cleanup-failed");
     }
     if (bestEffort) return;
     if (capture.failed) fail(capture.failed);

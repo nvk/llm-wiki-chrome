@@ -53,6 +53,8 @@ ALLOWED_OPERATIONS = {
     "scroll_viewport",
     "start_log_capture",
     "stop_log_capture",
+    "start_request_capture",
+    "stop_request_capture",
     "before_mutation",
 }
 FORBIDDEN_KEYS = {
@@ -96,6 +98,7 @@ ACTION_KEYS = {
     "detach_debugger": {"op"},
     "before_mutation": {"op"},
     "stop_log_capture": {"op"},
+    "stop_request_capture": {"op"},
     "wait_ax": {"op", "locator", "timeout_ms"},
     "wait_dom": {"op", "locator", "timeout_ms"},
     "assert_ax": {"op", "locator"},
@@ -115,6 +118,7 @@ ACTION_KEYS = {
     "capture_viewport_private": {"op", "private_result", "quality", "max_bytes"},
     "scroll_viewport": {"op", "direction", "distance_px"},
     "start_log_capture": {"op", "private_result", "max_entries", "max_text_bytes"},
+    "start_request_capture": {"op", "private_result", "max_entries", "max_url_bytes"},
     "first_success": {"op", "branches"},
 }
 LOCATOR_OPERATIONS = {
@@ -480,6 +484,16 @@ def _validate_action(
             or not 256 <= action["max_text_bytes"] <= 16384
         ):
             raise ProtocolError("log capture max_text_bytes is out of bounds")
+    if operation == "start_request_capture":
+        if action.get("private_result") not in private_results:
+            raise ProtocolError("request capture references an undeclared private result")
+        if type(action.get("max_entries")) is not int or not 1 <= action["max_entries"] <= 500:
+            raise ProtocolError("request capture max_entries is out of bounds")
+        if (
+            type(action.get("max_url_bytes")) is not int
+            or not 256 <= action["max_url_bytes"] <= 16384
+        ):
+            raise ProtocolError("request capture max_url_bytes is out of bounds")
 
 
 def validate_program(program: Any) -> dict[str, Any]:
@@ -589,12 +603,26 @@ def validate_program(program: Any) -> dict[str, Any]:
         )
     ):
         raise ProtocolError("private log capture lifecycle is invalid")
+    request_starts = operations.count("start_request_capture")
+    request_stops = operations.count("stop_request_capture")
+    if (
+        request_starts != request_stops
+        or request_starts > 1
+        or top_level_operations.count("start_request_capture") != request_starts
+        or top_level_operations.count("stop_request_capture") != request_stops
+        or (
+            request_starts == 1
+            and operations.index("start_request_capture") >= operations.index("stop_request_capture")
+        )
+    ):
+        raise ProtocolError("private request capture lifecycle is invalid")
     extracted = {
         action["private_result"]
         for action in flat
         if action["op"] in {
             "extract_ax", "extract_ax_collection", "collect_ax_by_scrolling",
             "capture_viewport_private", "start_log_capture",
+            "start_request_capture",
         }
     }
     if extracted != private_result_set:

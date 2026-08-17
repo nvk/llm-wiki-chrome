@@ -25,7 +25,7 @@ async function run() {
       origin: target.origin,
       path_prefixes: [target.pathname],
     },
-    limits: {timeout_ms: 30000, max_actions: 8, max_repeat: 3},
+    limits: {timeout_ms: 30000, max_actions: 12, max_repeat: 3},
     private_slots: [],
     actions: [
       {op: "open_or_focus_exact_url"},
@@ -36,6 +36,12 @@ async function run() {
         max_entries: 50,
         max_text_bytes: 4096,
       },
+      {
+        op: "start_request_capture",
+        private_result: "page.requests",
+        max_entries: 50,
+        max_url_bytes: 4096,
+      },
       {op: "scroll_viewport", direction: "down", distance_px: 200},
       {
         op: "capture_viewport_private",
@@ -43,12 +49,13 @@ async function run() {
         quality: 40,
         max_bytes: 262144,
       },
+      {op: "stop_request_capture"},
       {op: "stop_log_capture"},
       {op: "detach_debugger"},
     ],
     result: {
       public_fields: ["status", "action_count", "private_result_count"],
-      private_fields: ["page.viewport", "page.browser_log"],
+      private_fields: ["page.viewport", "page.browser_log", "page.requests"],
     },
   };
   program.program_sha256 = await canonicalProgramHash(program);
@@ -62,6 +69,9 @@ async function run() {
   }
   const bytes = atob(capture.data_base64).length;
   if (bytes < 1 || bytes > 262144) throw new Error("invalid-private-capture");
+  if (!Array.isArray(result.private["page.requests"]?.entries)) {
+    throw new Error("missing-private-requests");
+  }
 
   // Only content-free counters cross the harness boundary. Discard the capture.
   result.private = {};
