@@ -4,6 +4,7 @@ const indicator = document.getElementById("indicator");
 const collaborationState = document.getElementById("collaboration-state");
 const collaborationDetail = document.getElementById("collaboration-detail");
 const collaborationIndicator = document.getElementById("collaboration-indicator");
+const connectTabButton = document.getElementById("connect-tab");
 const workspaceElement = document.getElementById("workspace");
 const collaborationList = document.getElementById("collaborations");
 const stopAllButton = document.getElementById("stop-all");
@@ -55,7 +56,7 @@ function collaborationRow(value) {
   return row;
 }
 
-function renderCollaborations(collaborations) {
+function renderCollaborations(collaborations, connectorReady) {
   collaborationList.replaceChildren(...collaborations.map(collaborationRow));
   const count = collaborations.length;
   workspaceElement.hidden = count === 0;
@@ -66,6 +67,10 @@ function renderCollaborations(collaborations) {
     ? "Open an HTTPS page and click the extension to collaborate."
     : "Your local agent can control only the grants listed below.";
   collaborationIndicator.className = `indicator ${count ? "connected" : "inactive"}`;
+  connectTabButton.textContent = count && connectorReady
+    ? "Connected — agent notified"
+    : "Connect active tab";
+  connectTabButton.className = `connect-button ${count && connectorReady ? "connected" : ""}`;
 }
 
 function renderJob(job) {
@@ -91,7 +96,10 @@ function render(status) {
   stateElement.textContent = labels[state];
   detailElement.textContent = String(connector.detail || "").slice(0, 240);
   indicator.className = `indicator ${state}`;
-  renderCollaborations(Array.isArray(status?.collaborations) ? status.collaborations : []);
+  renderCollaborations(
+    Array.isArray(status?.collaborations) ? status.collaborations : [],
+    state === "connected" || state === "busy" || state === "authorizing",
+  );
   renderJob(status?.job || null);
 }
 
@@ -109,6 +117,15 @@ stopAllButton.addEventListener("click", () => {
   stopAllButton.disabled = true;
   send({type: "stop-all-collaborations"}).finally(() => {
     stopAllButton.disabled = false;
+    refresh();
+  });
+});
+
+connectTabButton.addEventListener("click", () => {
+  connectTabButton.disabled = true;
+  connectTabButton.textContent = "Connecting active tab…";
+  send({type: "connect-active-tab"}).finally(() => {
+    connectTabButton.disabled = false;
     refresh();
   });
 });

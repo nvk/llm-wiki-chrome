@@ -40,6 +40,8 @@ CSS selector, script, URL-navigation, cookie, storage, download, upload, or
 credential tool. Direct click/type/key calls cross one internal mutation
 boundary; they are intentionally unsuitable for effects that require a
 provider-owned journal or transactional verification.
+`browser_status` reports only connector readiness and the number of explicit
+grants; it returns no URL, origin, identifier, or page content.
 
 The extension independently validates the signed program and private-slot
 shape. It accepts an HTTPS origin only when the program's collaboration ID,

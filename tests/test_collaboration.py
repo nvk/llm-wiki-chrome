@@ -67,6 +67,11 @@ class CollaborationControllerTests(unittest.TestCase):
 
     def test_lists_only_explicit_click_grants(self) -> None:
         self.assertEqual(self.controller.tabs(), self.client.shared)
+        self.assertEqual(self.controller.status(), {
+            "connected": True,
+            "shared_tabs": 1,
+            "ready": True,
+        })
 
     def test_snapshot_compiles_one_exact_read_program(self) -> None:
         result = self.controller.snapshot(self.collaboration_id, max_items=300)

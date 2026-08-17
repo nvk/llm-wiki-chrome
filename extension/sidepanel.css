@@ -91,6 +91,14 @@ button {
   cursor: pointer;
 }
 
+.connect-button {
+  margin-top: -12px;
+}
+
+.connect-button.connected {
+  background: #317258;
+}
+
 .workspace,
 .job {
   margin: -12px 0 28px;

@@ -138,6 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     status = sub.add_parser("browser-status")
     status.add_argument("--native-socket", type=Path)
     sub.add_parser("browser-tabs")
+    sub.add_parser("browser-agent-status")
     snapshot = sub.add_parser("browser-snapshot")
     snapshot.add_argument("--collaboration-id", required=True)
     snapshot.add_argument("--max-items", type=int, default=400)
@@ -164,6 +165,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "browser-tabs":
         print(json.dumps({"tabs": BrowserExecutorClient().collaborations()}, sort_keys=True))
+        return 0
+    if args.command == "browser-agent-status":
+        print(json.dumps(BrowserCollaborationController().status(), sort_keys=True))
         return 0
     if args.command == "browser-snapshot":
         value = BrowserCollaborationController().snapshot(

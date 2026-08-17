@@ -49,6 +49,11 @@ LOCATOR_SCHEMA: dict[str, Any] = {
 
 TOOLS = [
     {
+        "name": "browser_status",
+        "description": "Check whether the local connector is online and how many tabs are explicitly shared.",
+        "inputSchema": _object_schema({}),
+    },
+    {
         "name": "browser_tabs",
         "description": (
             "List only HTTPS tabs the user explicitly shared by clicking the LLM Wiki Browser "
@@ -122,9 +127,12 @@ class McpServer:
     def _tool_result(self, name: str, arguments: Any) -> dict[str, Any]:
         if not isinstance(arguments, dict):
             raise ValueError("tool arguments must be an object")
-        if name == "browser_tabs":
+        if name == "browser_status":
             self._require_arguments(arguments, set(), set())
-            value: Any = {"tabs": self.controller.tabs()}
+            value: Any = self.controller.status()
+        elif name == "browser_tabs":
+            self._require_arguments(arguments, set(), set())
+            value = {"tabs": self.controller.tabs()}
         elif name == "browser_snapshot":
             self._require_arguments(arguments, {"collaboration_id", "max_items"}, {"collaboration_id"})
             value = self.controller.snapshot(

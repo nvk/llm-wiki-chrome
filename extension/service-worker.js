@@ -552,6 +552,17 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "connect-active-tab") {
+    chrome.tabs.query({active: true, lastFocusedWindow: true}).then(async (tabs) => {
+      if (tabs.length !== 1) return {connected: false};
+      await startCollaboration(tabs[0]);
+      const workspace = await checkedWorkspace();
+      return {
+        connected: workspace.collaborations.some((value) => value.tab_id === tabs[0].id),
+      };
+    }).then(sendResponse).catch(() => sendResponse({connected: false}));
+    return true;
+  }
   if (message?.type === "stop-collaboration") {
     revokeCollaboration().then((stopped) => sendResponse({stopped})).catch(() => {
       sendResponse({stopped: false});

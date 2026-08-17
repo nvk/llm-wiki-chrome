@@ -9,6 +9,9 @@ from browser_executor.mcp_server import McpServer, TOOLS
 
 
 class FakeController:
+    def status(self) -> dict[str, Any]:
+        return {"connected": True, "shared_tabs": 1, "ready": True}
+
     def tabs(self) -> list[dict[str, str]]:
         return [{
             "collaboration_id": "a" * 64,
@@ -66,13 +69,17 @@ class McpServerTests(unittest.TestCase):
         listed = self.server.dispatch(self.request("tools/list"))
         names = [tool["name"] for tool in listed["result"]["tools"]]
         self.assertEqual(names, [
-            "browser_tabs", "browser_snapshot", "browser_screenshot", "browser_click",
-            "browser_type", "browser_key", "browser_scroll",
+            "browser_status", "browser_tabs", "browser_snapshot", "browser_screenshot",
+            "browser_click", "browser_type", "browser_key", "browser_scroll",
         ])
         self.assertNotIn("javascript", json.dumps(TOOLS).lower())
         self.assertNotIn("program", names)
 
     def test_tabs_and_snapshot_return_private_runtime_content_to_caller(self) -> None:
+        status = self.server.dispatch(self.request("tools/call", {
+            "name": "browser_status", "arguments": {},
+        }))
+        self.assertTrue(status["result"]["structuredContent"]["ready"])
         tabs = self.server.dispatch(self.request("tools/call", {
             "name": "browser_tabs", "arguments": {},
         }))
@@ -103,7 +110,7 @@ class McpServerTests(unittest.TestCase):
         lines = destination.getvalue().splitlines()
         self.assertEqual(len(lines), 2)
         self.assertEqual(json.loads(lines[0])["result"], {})
-        self.assertEqual(len(json.loads(lines[1])["result"]["tools"]), 7)
+        self.assertEqual(len(json.loads(lines[1])["result"]["tools"]), 8)
 
     def test_tool_failures_use_is_error_without_json_rpc_failure_details(self) -> None:
         response = self.server.dispatch(self.request("tools/call", {

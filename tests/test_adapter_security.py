@@ -66,7 +66,9 @@ class AdapterAndSecurityTests(unittest.TestCase):
                 self.assertNotIn(diagnostic_method, source)
         self.assertIn('error: "invalid-program"', source)
         self.assertNotIn("typed-execution-disabled", source)
-        self.assertNotIn("tabs.query", source)
+        self.assertEqual(source.count("chrome.tabs.query"), 1)
+        self.assertIn("{active: true, lastFocusedWindow: true}", source)
+        self.assertNotIn("chrome.tabs.query({})", source)
 
     @unittest.skipUnless(shutil.which("node"), "Node is required for the MV3 contract check")
     def test_service_worker_independently_validates_signed_programs(self) -> None:
@@ -104,6 +106,7 @@ validateProgram(program).then(() => {
         self.assertIn("Shared tabs", html)
         self.assertIn("Stop all", html)
         self.assertIn("Cancel job", html)
+        self.assertIn("Connect active tab", html)
 
     def test_direct_agent_interface_exposes_only_fixed_structured_tools(self) -> None:
         source = (ROOT / "browser_executor" / "mcp_server.py").read_text(encoding="utf-8")

@@ -31,7 +31,7 @@ browser planner into this repository.
 | Navigate websites | Exact URL plus reviewed same-origin paths | Implemented in source; provider parity pending |
 | Terminal/Desktop bridge | Stable Native Messaging host and private Unix socket | Foundation complete |
 | Side-panel status | Content-free connector/job state only | Foundation complete |
-| Direct agent tool surface | MCP tools for clicked-tab list, snapshot, screenshot, semantic click/type/key, and scroll | Implemented in source; live-session gate pending |
+| Direct agent tool surface | MCP tools for readiness, clicked-tab list, snapshot, screenshot, semantic click/type/key, and scroll | Implemented in source; live-session gate pending |
 | Controlled-tab highlighting | Fixed green page outline/pill and per-tab `ON` action badge | Implemented in source; live-session gate pending |
 | Screenshots / visual context | Bounded private viewport JPEG, no automatic model upload | Implemented in source; consumer parity pending |
 | Scroll long pages and virtualized lists | Bounded typed scroll plus deduplicating AX collection on the exact tab | Implemented in source; X provider adoption pending |
@@ -55,13 +55,15 @@ private exact-URL discovery, per-tab and whole-workspace revocation, content-fre
 job progress and cancellation, exact-tab activation, same-origin/path
 enforcement, typed DOM/AX queries, bounded waits and branches, private
 extraction, clicks, focus, key chords, private text insertion, and the governed
-mutation challenge. A local MCP server now exposes seven fixed structured agent
+mutation challenge. A local MCP server now exposes eight fixed structured agent
 tools, so clicking the extension is sufficient to make the exact tab visible
 and operable to a newly started configured agent session. It does not expose an
 arbitrary program or scripting tool. Per-Chrome-instance private sockets are
 aggregated by exact grant, avoiding last-process-wins behavior when several
 Chrome windows or profiles have the extension loaded. A fixed content-blind
 page marker makes every active grant visually obvious.
+The side panel has an explicit connect button whose connected state confirms
+that the local agent relay has been notified.
 
 Deterministic tests cover signed-program validation, exact-origin tab queries,
 DOM fallback, private AX extraction, private insertion, one mutation challenge,

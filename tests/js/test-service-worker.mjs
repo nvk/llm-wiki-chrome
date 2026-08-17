@@ -113,6 +113,10 @@ globalThis.chrome = {
       if (!value) throw new Error("synthetic tab is closed");
       return structuredClone(value);
     },
+    query: async (query) => {
+      assert.deepEqual(query, {active: true, lastFocusedWindow: true});
+      return [...tabs.values()].filter((value) => value.active).map((value) => structuredClone(value));
+    },
   },
   windows: {
     update: async (windowId, changes) => {
@@ -165,7 +169,7 @@ async function runtimeMessage(message) {
 await import("../../extension/service-worker.js");
 nativePort.onMessage.emit({protocol: PROTOCOL, type: "ready"});
 
-chrome.action.onClicked.emit(structuredClone(tabs.get(1)));
+assert.equal((await runtimeMessage({type: "connect-active-tab"})).connected, true);
 await waitFor(() => stored.collaborationWorkspace?.collaborations?.length === 1);
 assert.equal(stored.collaborationWorkspace.collaborations[0].url, tabs.get(1).url);
 assert.match(stored.collaborationWorkspace.collaborations[0].collaboration_id, /^[a-f0-9]{64}$/u);

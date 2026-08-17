@@ -28,6 +28,10 @@ An active grant is visible on the page as a fixed green outline and
 `LLM WIKI • CONTROLLED` pill, plus an `ON` action badge. The marker is packaged,
 noninteractive, content-blind, and injected only after the extension click; it
 is removed when the grant is revoked and never receives page or job content.
+The side panel also provides an explicit `Connect active tab` button. Its
+connected state means the grant has been published through the live local
+connector, so the agent can detect readiness with `browser_status` without
+asking the user to inspect extension internals.
 
 The local agent and targeted adapters retrieve the private workspace through
 the native socket. A direct agent must first list the exact clicked grants and
@@ -69,7 +73,7 @@ surface instead of constructing programs themselves:
 .venv/bin/python adapter.py mcp-server
 ```
 
-The MCP server publishes only seven fixed tools: `browser_tabs`,
+The MCP server publishes only eight fixed tools: `browser_status`, `browser_tabs`,
 `browser_snapshot`, `browser_screenshot`, `browser_click`, `browser_type`,
 `browser_key`, and `browser_scroll`. It has no arbitrary program, CSS selector,
 script, or natural-language execution tool. Page content is returned only to
@@ -90,6 +94,7 @@ bounded execution slice:
   Chrome profiles or processes cannot overwrite one another's shared tabs;
 - a fixed page outline/pill and toolbar badge showing exactly which tabs are
   controlled;
+- an explicit side-panel connect button plus content-free agent readiness tool;
 - a content-free side-panel workspace, progress meter, per-tab revocation, and cancellation;
 - separate read and mutation capabilities;
 - one governed mutation callback in the Python client;

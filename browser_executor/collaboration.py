@@ -208,6 +208,15 @@ class BrowserCollaborationController:
         """Return only tabs explicitly shared by clicking the extension action."""
         return self.client.collaborations()
 
+    def status(self) -> dict[str, Any]:
+        """Return content-free connector and click-grant readiness."""
+        collaborations = self.client.collaborations()
+        return {
+            "connected": True,
+            "shared_tabs": len(collaborations),
+            "ready": bool(collaborations),
+        }
+
     def _collaboration(self, collaboration_id: Any) -> dict[str, str]:
         if not isinstance(collaboration_id, str) or not COLLABORATION_ID.fullmatch(collaboration_id):
             raise CollaborationError("collaboration_id is invalid")
