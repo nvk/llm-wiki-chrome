@@ -1,73 +1,53 @@
-const BROWSER_PROTOCOL = "llm-wiki-browser-executor/v1";
+import {
+  BROWSER_PROTOCOL,
+  validatePrivateValues,
+  validateProgram,
+} from "./protocol.mjs";
+import {BrowserExecutor, ExecutionError} from "./executor.mjs";
+
 const NATIVE_HOST = "net.llmwiki.browser_execution";
 const CONNECTOR_STATE_KEY = "nativeConnectorState";
-const APPROVED_ORIGINS = new Set(["https://docs.google.com", "https://x.com"]);
-const ALLOWED_OPERATIONS = new Set([
-  "open_or_focus_exact_url", "assert_exact_target", "attach_debugger", "detach_debugger",
-  "wait_ax", "wait_dom", "assert_ax", "first_success", "click_ax", "click_dom",
-  "focus_ax", "dispatch_key_chord", "insert_private_text", "assert_ax_private_value",
-  "extract_ax", "extract_ax_collection", "before_mutation",
-]);
-const FORBIDDEN_KEYS = new Set([
-  "javascript", "script", "expression", "runtime_evaluate", "cdp_method",
-  "cookie", "storage", "network",
-]);
-const TOP_LEVEL_KEYS = new Set([
-  "protocol", "program_id", "program_sha256", "plan_sha256", "driver",
-  "capability", "target", "limits", "private_slots", "actions", "result",
-]);
-const PUBLIC_RESULT_FIELDS = new Set([
-  "status", "action_count", "mutation_started", "private_result_count",
-]);
-const MUTATION_ONLY = new Set(["insert_private_text", "before_mutation"]);
-const LOCATOR_OPERATIONS = new Set([
-  "wait_ax", "wait_dom", "assert_ax", "click_ax", "click_dom", "focus_ax",
-  "extract_ax", "extract_ax_collection",
-]);
-const LOCATOR_KEYS = new Set([
-  "selector", "role", "roles", "name", "name_contains", "name_contains_any",
-  "name_matches", "within", "within_name_contains_any", "ordinal", "visible",
-  "checked", "focused", "unique",
-]);
-const ACTION_KEYS = new Map([
-  ["open_or_focus_exact_url", new Set(["op"])],
-  ["assert_exact_target", new Set(["op"])],
-  ["attach_debugger", new Set(["op"])],
-  ["detach_debugger", new Set(["op"])],
-  ["before_mutation", new Set(["op"])],
-  ["wait_ax", new Set(["op", "locator", "timeout_ms"])],
-  ["wait_dom", new Set(["op", "locator", "timeout_ms"])],
-  ["assert_ax", new Set(["op", "locator"])],
-  ["click_ax", new Set(["op", "locator"])],
-  ["click_dom", new Set(["op", "locator"])],
-  ["focus_ax", new Set(["op", "locator"])],
-  ["dispatch_key_chord", new Set(["op", "keys"])],
-  ["insert_private_text", new Set(["op", "slot", "replace_all"])],
-  ["assert_ax_private_value", new Set(["op", "slot"])],
-  ["extract_ax", new Set(["op", "locator", "fields", "private_result", "max_items"])],
-  ["extract_ax_collection", new Set(["op", "locator", "fields", "private_result", "max_items"])],
-  ["first_success", new Set(["op", "branches"])],
-]);
-const EXTRACTION_FIELDS = new Set(["name", "role", "value", "checked", "focused"]);
-const KEY_NAMES = new Set([
-  "platform-primary", "control", "meta", "alt", "shift", "enter", "escape",
-  "tab", "arrow-up", "arrow-down", "arrow-left", "arrow-right", "backspace",
-  "delete", ..."abcdefghijklmnopqrstuvwxyz", ..."0123456789",
-]);
+const JOB_ID = /^[a-f0-9]{36}$/u;
+const ERROR_CODE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
+
 let nativePort = null;
 let reconnectTimer = null;
+let activeJob = null;
+
+function hasExactKeys(value, expected) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const actual = Object.keys(value).sort();
+  return actual.length === expected.length && expected.slice().sort()
+    .every((key, index) => key === actual[index]);
+}
 
 async function setConnectorState(state, detail = "") {
   await chrome.storage.session.set({
-    [CONNECTOR_STATE_KEY]: { state, detail: String(detail || "").slice(0, 240) },
+    [CONNECTOR_STATE_KEY]: {state, detail: String(detail || "").slice(0, 240)},
   });
-  await chrome.action.setBadgeText({ text: state === "connected" ? "" : "!" });
-  await chrome.action.setBadgeBackgroundColor({ color: "#C53030" });
+  await chrome.action.setBadgeText({text: state === "connected" ? "" : "!"});
+  await chrome.action.setBadgeBackgroundColor({color: "#C53030"});
 }
 
-function nativeSend(value) {
-  if (!nativePort) throw new Error("The local browser executor is offline.");
-  nativePort.postMessage({ protocol: BROWSER_PROTOCOL, ...value });
+function sendThrough(port, value) {
+  if (!port || nativePort !== port) throw new Error("native-port-unavailable");
+  port.postMessage({protocol: BROWSER_PROTOCOL, ...value});
+}
+
+function finishBoundary(job, authorized) {
+  const boundary = job?.boundary;
+  if (!boundary || boundary.settled) return false;
+  boundary.settled = true;
+  clearTimeout(boundary.timer);
+  job.boundary = null;
+  boundary.resolve(authorized === true);
+  return true;
+}
+
+function cancelActiveJob(port) {
+  if (!activeJob || activeJob.port !== port) return;
+  activeJob.cancelled = true;
+  finishBoundary(activeJob, false);
 }
 
 function scheduleReconnect() {
@@ -85,11 +65,14 @@ function connectNativeBridge() {
     nativePort = port;
     setConnectorState("connecting").catch(() => {});
     port.onMessage.addListener((message) => {
-      handleNativeMessage(message).catch(() => {
-        setConnectorState("error", "Bounded executor validation failed.").catch(() => {});
+      handleNativeMessage(message, port).catch(() => {
+        cancelActiveJob(port);
+        setConnectorState("error", "Bounded executor rejected a local message.").catch(() => {});
       });
     });
     port.onDisconnect.addListener(() => {
+      void chrome.runtime.lastError;
+      cancelActiveJob(port);
       if (nativePort === port) nativePort = null;
       setConnectorState("offline", "Native host disconnected.").catch(() => {});
       scheduleReconnect();
@@ -101,270 +84,160 @@ function connectNativeBridge() {
   }
 }
 
-function rejectForbiddenKeys(value) {
-  if (Array.isArray(value)) {
-    for (const child of value) rejectForbiddenKeys(child);
+function filterFields(value, fields) {
+  return Object.fromEntries(fields.filter((field) => Object.hasOwn(value, field))
+    .map((field) => [field, value[field]]));
+}
+
+function safeErrorCode(error) {
+  const code = error instanceof ExecutionError ? error.code : "internal-error";
+  return ERROR_CODE.test(code) ? code : "internal-error";
+}
+
+function publicSnapshot(program, executor, status) {
+  return filterFields({
+    status,
+    action_count: executor?.actionCount || 0,
+    mutation_started: executor?.mutationStarted === true,
+    private_result_count: status === "ok" ? Object.keys(executor?.privateResults || {}).length : 0,
+  }, program.result.public_fields);
+}
+
+function requestMutation(job) {
+  if (job.cancelled || job.boundary) return Promise.resolve(false);
+  const remaining = Math.max(1, job.executor.deadline - Date.now());
+  return new Promise((resolve) => {
+    const boundary = {resolve, settled: false, timer: null};
+    boundary.timer = setTimeout(() => finishBoundary(job, false), remaining);
+    job.boundary = boundary;
+    try {
+      sendThrough(job.port, {type: "before-mutation", job_id: job.jobId});
+    } catch (_error) {
+      finishBoundary(job, false);
+    }
+  });
+}
+
+function handleMutationAuthorization(message, port) {
+  const job = activeJob;
+  if (!hasExactKeys(message, ["protocol", "type", "job_id", "authorized"]) ||
+      !job || job.port !== port || job.jobId !== message.job_id ||
+      typeof message.authorized !== "boolean" || !job.boundary) {
+    cancelActiveJob(port);
     return;
   }
-  if (!value || typeof value !== "object") return;
-  for (const [key, child] of Object.entries(value)) {
-    if (FORBIDDEN_KEYS.has(String(key).toLowerCase())) {
-      throw new Error("The typed program contains a forbidden field.");
+  finishBoundary(job, message.authorized);
+}
+
+async function executeJob(message, port) {
+  const jobId = message.job_id;
+  if (activeJob) {
+    sendThrough(port, {
+      type: "result", job_id: jobId, status: "error", public: {}, private: {},
+      error: "job-already-active",
+    });
+    return;
+  }
+
+  let program;
+  try {
+    if (!hasExactKeys(message, ["protocol", "type", "job_id", "program", "private_values"])) {
+      throw new Error("invalid-job-shape");
     }
-    rejectForbiddenKeys(child);
+    program = await validateProgram(message.program);
+    validatePrivateValues(program, message.private_values);
+  } catch (_error) {
+    sendThrough(port, {
+      type: "result", job_id: jobId, status: "error", public: {}, private: {},
+      error: "invalid-program",
+    });
+    return;
   }
-}
 
-function rejectUnknownKeys(value, allowed, label) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label} must be an object.`);
+  let platformInfo;
+  try {
+    platformInfo = await chrome.runtime.getPlatformInfo();
+  } catch (_error) {
+    sendThrough(port, {
+      type: "result", job_id: jobId, status: "error", public: {}, private: {},
+      error: "executor-unavailable",
+    });
+    return;
   }
-  if (Object.keys(value).some((key) => !allowed.has(key))) {
-    throw new Error(`${label} contains unsupported fields.`);
-  }
-}
+  const job = {
+    jobId,
+    port,
+    boundary: null,
+    cancelled: false,
+    executor: null,
+  };
+  const executor = new BrowserExecutor({
+    chromeApi: chrome,
+    platform: platformInfo.os,
+    isCancelled: () => job.cancelled,
+  });
+  job.executor = executor;
+  activeJob = job;
 
-function validIdentifier(value, lowercase = false) {
-  const pattern = lowercase
-    ? /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
-    : /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$/;
-  return typeof value === "string" && pattern.test(value);
-}
-
-function canonicalValue(value) {
-  if (Array.isArray(value)) return value.map(canonicalValue);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.keys(value).sort().map((key) => [key, canonicalValue(value[key])]),
-  );
-}
-
-async function canonicalProgramHash(program) {
-  const copy = structuredClone(program);
-  delete copy.program_sha256;
-  const bytes = new TextEncoder().encode(JSON.stringify(canonicalValue(copy)));
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function flattenActions(actions, depth = 0) {
-  if (depth > 4) throw new Error("The typed program is nested too deeply.");
-  const flat = [];
-  for (const action of actions) {
-    if (!action || typeof action !== "object" || !ALLOWED_OPERATIONS.has(action.op)) {
-      throw new Error("The typed program contains an unsupported action.");
+  try {
+    const result = await executor.run(
+      program,
+      message.private_values,
+      () => requestMutation(job),
+    );
+    if (job.cancelled) throw new ExecutionError("job-cancelled");
+    sendThrough(port, {
+      type: "result",
+      job_id: jobId,
+      status: "ok",
+      public: filterFields(result.public, program.result.public_fields),
+      private: filterFields(result.private, program.result.private_fields),
+    });
+  } catch (error) {
+    try {
+      sendThrough(port, {
+        type: "result",
+        job_id: jobId,
+        status: "error",
+        public: publicSnapshot(program, executor, "error"),
+        private: {},
+        error: safeErrorCode(error),
+      });
+    } catch (_sendError) {
+      // A disconnected native port has already cancelled the job.
     }
-    flat.push(action);
-    if (action.branches !== undefined) {
-      if (action.op !== "first_success" || !Array.isArray(action.branches) ||
-          action.branches.length < 1 || action.branches.length > 4) {
-        throw new Error("The typed program contains invalid branches.");
-      }
-      for (const branch of action.branches) {
-        if (!Array.isArray(branch) || branch.length < 1) throw new Error("A branch is empty.");
-        flat.push(...flattenActions(branch, depth + 1));
-      }
-    }
-  }
-  return flat;
-}
-
-function validateLocator(locator, label, depth = 0) {
-  if (depth > 2) throw new Error("A locator is nested too deeply.");
-  rejectUnknownKeys(locator, LOCATOR_KEYS, label);
-  if (Object.keys(locator).length < 1) throw new Error("A locator is empty.");
-  if (locator.selector !== undefined &&
-      (typeof locator.selector !== "string" || locator.selector.length < 1 || locator.selector.length > 16384)) {
-    throw new Error("A locator selector is invalid.");
-  }
-  if (locator.role !== undefined && !validIdentifier(locator.role, true)) {
-    throw new Error("A locator role is invalid.");
-  }
-  if (locator.roles !== undefined &&
-      (!Array.isArray(locator.roles) || locator.roles.length < 1 || locator.roles.length > 8 ||
-       new Set(locator.roles).size !== locator.roles.length ||
-       locator.roles.some((role) => !validIdentifier(role, true)))) {
-    throw new Error("Locator roles are invalid.");
-  }
-  for (const key of ["name", "name_contains", "name_matches"]) {
-    if (locator[key] !== undefined &&
-        (typeof locator[key] !== "string" || locator[key].length < 1 || locator[key].length > 16384)) {
-      throw new Error("A locator name predicate is invalid.");
-    }
-  }
-  for (const key of ["name_contains_any", "within_name_contains_any"]) {
-    if (locator[key] !== undefined &&
-        (!Array.isArray(locator[key]) || locator[key].length < 1 || locator[key].length > 12 ||
-         locator[key].some((item) => typeof item !== "string" || item.length < 1 || item.length > 512))) {
-      throw new Error("A locator string list is invalid.");
-    }
-  }
-  if (locator.ordinal !== undefined &&
-      (!Number.isInteger(locator.ordinal) || locator.ordinal < 0 || locator.ordinal > 1000)) {
-    throw new Error("A locator ordinal is invalid.");
-  }
-  for (const key of ["visible", "checked", "focused", "unique"]) {
-    if (locator[key] !== undefined && typeof locator[key] !== "boolean") {
-      throw new Error("A locator state predicate is invalid.");
-    }
-  }
-  if (locator.within !== undefined) validateLocator(locator.within, `${label}.within`, depth + 1);
-}
-
-function validateAction(action, program, index) {
-  rejectUnknownKeys(action, ACTION_KEYS.get(action.op), `Action ${index}`);
-  if (LOCATOR_OPERATIONS.has(action.op)) validateLocator(action.locator, `Action ${index} locator`);
-  if (["wait_ax", "wait_dom"].includes(action.op) &&
-      (!Number.isInteger(action.timeout_ms) || action.timeout_ms < 50 || action.timeout_ms > 300000)) {
-    throw new Error("An action timeout is invalid.");
-  }
-  if (action.op === "dispatch_key_chord" &&
-      (!Array.isArray(action.keys) || action.keys.length < 1 || action.keys.length > 5 ||
-       new Set(action.keys).size !== action.keys.length || action.keys.some((key) => !KEY_NAMES.has(key)))) {
-    throw new Error("A key chord is invalid.");
-  }
-  if (["insert_private_text", "assert_ax_private_value"].includes(action.op) &&
-      !program.private_slots.includes(action.slot)) {
-    throw new Error("An action references an undeclared private slot.");
-  }
-  if (action.op === "insert_private_text" && typeof action.replace_all !== "boolean") {
-    throw new Error("A private insertion mode is invalid.");
-  }
-  if (["extract_ax", "extract_ax_collection"].includes(action.op)) {
-    const maximum = action.op === "extract_ax_collection" ? 5000 : 100;
-    if (!Array.isArray(action.fields) || action.fields.length < 1 ||
-        new Set(action.fields).size !== action.fields.length ||
-        action.fields.some((field) => !EXTRACTION_FIELDS.has(field)) ||
-        !program.result.private_fields.includes(action.private_result) ||
-        !Number.isInteger(action.max_items) || action.max_items < 1 || action.max_items > maximum) {
-      throw new Error("A private extraction is invalid.");
-    }
+  } finally {
+    finishBoundary(job, false);
+    if (activeJob === job) activeJob = null;
   }
 }
 
-function validatePrivateValues(program, values) {
-  if (!values || typeof values !== "object" || Array.isArray(values)) {
-    throw new Error("Private values must be an object.");
-  }
-  const expected = [...program.private_slots].sort();
-  const actual = Object.keys(values).sort();
-  if (JSON.stringify(expected) !== JSON.stringify(actual) ||
-      actual.some((key) => typeof values[key] !== "string")) {
-    throw new Error("Private values do not match the declared private slots.");
-  }
-}
-
-async function validateProgram(program) {
-  rejectForbiddenKeys(program);
-  rejectUnknownKeys(program, TOP_LEVEL_KEYS, "The browser program");
-  if (new TextEncoder().encode(JSON.stringify(program)).length > 262144) {
-    throw new Error("The browser program is too large.");
-  }
-  if (program.protocol !== BROWSER_PROTOCOL || !validIdentifier(program.program_id) ||
-      !/^[a-f0-9]{64}$/.test(program.plan_sha256 || "") ||
-      !/^[a-f0-9]{64}$/.test(program.program_sha256 || "")) {
-    throw new Error("The browser program identity is invalid.");
-  }
-  if (program.program_sha256 !== await canonicalProgramHash(program)) {
-    throw new Error("The browser program hash does not match.");
-  }
-  rejectUnknownKeys(program.driver, new Set(["id", "version"]), "The browser driver");
-  if (!validIdentifier(program.driver.id, true) || !validIdentifier(program.driver.version)) {
-    throw new Error("The browser driver identity is invalid.");
-  }
-  if (!program.target || typeof program.target.url !== "string" ||
-      typeof program.target.origin !== "string" || !Array.isArray(program.target.path_prefixes)) {
-    throw new Error("The browser target is invalid.");
-  }
-  rejectUnknownKeys(program.target, new Set(["url", "origin", "path_prefixes"]), "The browser target");
-  const url = new URL(program.target.url);
-  if (url.protocol !== "https:" || url.origin !== program.target.origin ||
-      !APPROVED_ORIGINS.has(url.origin) ||
-      url.username || url.password || url.hash ||
-      program.target.path_prefixes.length < 1 || program.target.path_prefixes.length > 8 ||
-      new Set(program.target.path_prefixes).size !== program.target.path_prefixes.length ||
-      program.target.path_prefixes.some((prefix) =>
-        typeof prefix !== "string" || !prefix.startsWith("/") || prefix.includes("?") ||
-        prefix.includes("#") || prefix.length > 2048) ||
-      !program.target.path_prefixes.some((prefix) => url.pathname.startsWith(prefix))) {
-    throw new Error("The browser target is outside approved origins or paths.");
-  }
-  rejectUnknownKeys(program.limits, new Set(["timeout_ms", "max_actions", "max_repeat"]), "Program limits");
-  if (!Number.isInteger(program.limits.timeout_ms) || program.limits.timeout_ms < 1000 ||
-      program.limits.timeout_ms > 300000 || !Number.isInteger(program.limits.max_actions) ||
-      program.limits.max_actions < 1 || program.limits.max_actions > 200 ||
-      !Number.isInteger(program.limits.max_repeat) || program.limits.max_repeat < 1 ||
-      program.limits.max_repeat > 20 ||
-      !Array.isArray(program.actions) || program.actions.length < 1) {
-    throw new Error("The browser program limits are invalid.");
-  }
-  if (!Array.isArray(program.private_slots) || program.private_slots.length > 32 ||
-      new Set(program.private_slots).size !== program.private_slots.length ||
-      program.private_slots.some((slot) => !/^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/.test(slot))) {
-    throw new Error("Private slots are invalid.");
-  }
-  rejectUnknownKeys(program.result, new Set(["public_fields", "private_fields"]), "Program result");
-  if (!Array.isArray(program.result.public_fields) ||
-      program.result.public_fields.some((field) => !PUBLIC_RESULT_FIELDS.has(field)) ||
-      new Set(program.result.public_fields).size !== program.result.public_fields.length ||
-      !Array.isArray(program.result.private_fields) || program.result.private_fields.length > 32 ||
-      new Set(program.result.private_fields).size !== program.result.private_fields.length ||
-      program.result.private_fields.some((field) =>
-        !/^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/.test(field))) {
-    throw new Error("The browser result declaration is invalid.");
-  }
-  const flat = flattenActions(program.actions);
-  if (flat.length > program.limits.max_actions) throw new Error("The browser program is too large.");
-  flat.forEach((action, index) => validateAction(action, program, index));
-  const operations = flat.map((action) => action.op);
-  const boundaries = operations.filter((operation) => operation === "before_mutation").length;
-  if (program.capability === "read" &&
-      operations.some((operation) => MUTATION_ONLY.has(operation))) {
-    throw new Error("A read program requested a mutation action.");
-  }
-  if (program.capability === "mutation" && boundaries !== 1) {
-    throw new Error("A mutation program requires one governed boundary.");
-  }
-  if (!["read", "mutation"].includes(program.capability)) {
-    throw new Error("The browser capability is invalid.");
-  }
-  const extracted = new Set(
-    flat.filter((action) => ["extract_ax", "extract_ax_collection"].includes(action.op))
-      .map((action) => action.private_result),
-  );
-  if (extracted.size !== program.result.private_fields.length ||
-      program.result.private_fields.some((field) => !extracted.has(field))) {
-    throw new Error("Private results do not match extraction actions.");
-  }
-  return program;
-}
-
-async function handleNativeMessage(message) {
+async function handleNativeMessage(message, port) {
   if (!message || message.protocol !== BROWSER_PROTOCOL) {
-    throw new Error("The native connector protocol does not match this extension.");
+    cancelActiveJob(port);
+    throw new Error("protocol-mismatch");
   }
   if (message.type === "ready") {
+    if (!hasExactKeys(message, ["protocol", "type"])) {
+      throw new Error("invalid-ready-message");
+    }
     await setConnectorState("connected");
     return;
   }
-  if (message.type !== "job" || !/^[a-f0-9]{36}$/.test(message.job_id || "")) {
-    throw new Error("The native connector returned an unknown message.");
+  if (message.type === "mutation-authorized") {
+    handleMutationAuthorization(message, port);
+    return;
   }
-  await validateProgram(message.program);
-  validatePrivateValues(message.program, message.private_values);
-  nativeSend({
-    type: "result",
-    job_id: message.job_id,
-    status: "error",
-    public: { status: "error", action_count: 0 },
-    private: {},
-    error: "typed-execution-disabled",
-  });
+  if (message.type !== "job" || !JOB_ID.test(message.job_id || "")) {
+    cancelActiveJob(port);
+    throw new Error("unknown-native-message");
+  }
+  await executeJob(message, port);
 }
 
 async function configureExtension() {
   connectNativeBridge();
-  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  await chrome.sidePanel.setPanelBehavior({openPanelOnActionClick: true});
 }
 
 chrome.runtime.onInstalled.addListener(configureExtension);
@@ -375,7 +248,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || message.type !== "get-status") return false;
   if (!nativePort) connectNativeBridge();
   chrome.storage.session.get(CONNECTOR_STATE_KEY).then((stored) => {
-    sendResponse(stored[CONNECTOR_STATE_KEY] || { state: "offline", detail: "Connector starting." });
+    sendResponse(stored[CONNECTOR_STATE_KEY] || {state: "offline", detail: "Connector starting."});
   });
   return true;
 });

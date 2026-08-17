@@ -16,7 +16,8 @@
     "https://x.com/*"
   ],
   "background": {
-    "service_worker": "service-worker.js"
+    "service_worker": "service-worker.js",
+    "type": "module"
   },
   "action": {
     "default_title": "LLM Wiki Browser Executor"

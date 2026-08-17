@@ -202,12 +202,51 @@ class ClientTests(unittest.TestCase):
         with self.assertRaisesRegex(ClientError, "non-generic error"):
             self.run_server(program, handler)
 
+    def test_result_shape_and_public_counters_are_exact(self) -> None:
+        program = fixture("x-space-read-v1.json")
+
+        def extra_field(connection: socket.socket, job: dict) -> None:
+            send_line(connection, {
+                "protocol": BROWSER_PROTOCOL,
+                "type": "result",
+                "job_id": job["job_id"],
+                "status": "ok",
+                "public": {"status": "ok"},
+                "private": {},
+                "undeclared": "synthetic",
+            })
+
+        with self.assertRaisesRegex(ClientError, "result shape"):
+            self.run_server(program, extra_field)
+
+        def wrong_count(connection: socket.socket, job: dict) -> None:
+            send_line(connection, {
+                "protocol": BROWSER_PROTOCOL,
+                "type": "result",
+                "job_id": job["job_id"],
+                "status": "ok",
+                "public": {"status": "ok", "private_result_count": 2},
+                "private": {},
+            })
+
+        with self.assertRaisesRegex(ClientError, "private result count"):
+            self.run_server(program, wrong_count)
+
     def test_private_values_must_exactly_match_slots(self) -> None:
         program = fixture("google-docs-suggestions-v1.json")
         with self.assertRaisesRegex(ProtocolError, "exactly match"):
             BrowserExecutorClient(Path("/tmp/absent-executor.sock")).run(
                 program,
                 private_values={"edit.find": "synthetic"},
+                before_mutation=lambda: None,
+            )
+
+    def test_private_values_are_individually_bounded(self) -> None:
+        program = fixture("google-docs-suggestions-v1.json")
+        with self.assertRaisesRegex(ProtocolError, "oversized"):
+            BrowserExecutorClient(Path("/tmp/absent-executor.sock")).run(
+                program,
+                private_values={"edit.find": "x" * 16_385, "edit.replace": "synthetic"},
                 before_mutation=lambda: None,
             )
 

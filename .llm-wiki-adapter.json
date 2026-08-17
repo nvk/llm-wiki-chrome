@@ -2,12 +2,14 @@
   "protocol": "llm-wiki-adapter/v1",
   "id": "browser-execution",
   "version": "0.0.1",
-  "description": "Private content-free foundation for exact-target typed browser execution used by targeted llm-wiki adapters.",
+  "description": "Private content-free exact-target typed browser execution substrate used by targeted llm-wiki adapters.",
   "distribution": "private",
   "entrypoint": [".venv/bin/python", "adapter.py"],
   "capabilities": [
     "browser-executor-protocol-validation",
     "browser-executor-native-messaging",
+    "browser-executor-typed-dom-ax-execution",
+    "browser-executor-governed-mutation-boundary",
     "browser-executor-content-free-status"
   ],
   "routes": [],

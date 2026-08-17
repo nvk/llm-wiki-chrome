@@ -31,6 +31,7 @@ TOP_LEVEL_KEYS = {
 
 ALLOWED_OPERATIONS = {
     "open_or_focus_exact_url",
+    "navigate_same_origin",
     "assert_exact_target",
     "attach_debugger",
     "detach_debugger",
@@ -46,6 +47,7 @@ ALLOWED_OPERATIONS = {
     "assert_ax_private_value",
     "extract_ax",
     "extract_ax_collection",
+    "capture_viewport_private",
     "before_mutation",
 }
 FORBIDDEN_KEYS = {
@@ -83,6 +85,7 @@ LOCATOR_KEYS = {
 }
 ACTION_KEYS = {
     "open_or_focus_exact_url": {"op"},
+    "navigate_same_origin": {"op", "url"},
     "assert_exact_target": {"op"},
     "attach_debugger": {"op"},
     "detach_debugger": {"op"},
@@ -98,6 +101,7 @@ ACTION_KEYS = {
     "assert_ax_private_value": {"op", "slot"},
     "extract_ax": {"op", "locator", "fields", "private_result", "max_items"},
     "extract_ax_collection": {"op", "locator", "fields", "private_result", "max_items"},
+    "capture_viewport_private": {"op", "private_result", "quality", "max_bytes"},
     "first_success": {"op", "branches"},
 }
 LOCATOR_OPERATIONS = {
@@ -109,6 +113,17 @@ LOCATOR_OPERATIONS = {
     "focus_ax",
     "extract_ax",
     "extract_ax_collection",
+}
+DOM_LOCATOR_OPERATIONS = {"wait_dom", "click_dom"}
+AX_IDENTITY_KEYS = {
+    "role",
+    "roles",
+    "name",
+    "name_contains",
+    "name_contains_any",
+    "name_matches",
+    "within",
+    "within_name_contains_any",
 }
 EXTRACTION_FIELDS = {"name", "role", "value", "checked", "focused"}
 KEY_NAMES = {
@@ -173,6 +188,14 @@ def _check_forbidden_keys(value: Any, path: str = "program") -> None:
             _check_forbidden_keys(child, f"{path}[{index}]")
 
 
+def _path_matches_prefix(path: str, prefix: str) -> bool:
+    return (
+        path == prefix
+        or (prefix.endswith("/") and path.startswith(prefix))
+        or path.startswith(prefix + "/")
+    )
+
+
 def iter_actions(actions: list[dict[str, Any]], depth: int = 0) -> Iterator[dict[str, Any]]:
     if depth > 4:
         raise ProtocolError("action nesting exceeds four levels")
@@ -230,8 +253,23 @@ def _validate_target(target: Any) -> None:
         raise ProtocolError("target path prefixes must be absolute paths")
     if len(prefixes) != len(set(prefixes)):
         raise ProtocolError("target path prefixes must be unique and bounded")
-    if not any(url.path.startswith(item) for item in prefixes):
+    if not any(_path_matches_prefix(url.path, item) for item in prefixes):
         raise ProtocolError("target URL is outside its approved path prefixes")
+
+
+def _validate_navigation_url(raw_url: Any, target: dict[str, Any]) -> None:
+    if not isinstance(raw_url, str) or len(raw_url.encode("utf-8")) > 16384:
+        raise ProtocolError("navigation URL must be a bounded string")
+    value = urlsplit(raw_url)
+    if (
+        value.scheme != "https"
+        or value.username is not None
+        or value.password is not None
+        or value.fragment
+        or f"{value.scheme}://{value.netloc}" != target["origin"]
+        or not any(_path_matches_prefix(value.path, prefix) for prefix in target["path_prefixes"])
+    ):
+        raise ProtocolError("navigation URL is outside the exact target policy")
 
 
 def _validate_limits(limits: Any) -> dict[str, int]:
@@ -271,6 +309,19 @@ def _validate_locator(locator: Any, path: str, depth: int = 0) -> None:
     for key in ("name", "name_contains", "name_matches"):
         if key in locator:
             _bounded_string(locator[key], f"{path}.{key}")
+    if "name_matches" in locator:
+        pattern = locator["name_matches"]
+        if (
+            len(pattern.encode("utf-8")) > 256
+            or any(token in pattern for token in ("(", ")", "{", "}"))
+            or re.search(r"(?:[+*?]){2,}", pattern)
+            or re.search(r"\\(?:[1-9]|k[<{])", pattern)
+        ):
+            raise ProtocolError(f"{path}.name_matches is outside the safe regex subset")
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise ProtocolError(f"{path}.name_matches is invalid") from exc
     for key in ("name_contains_any", "within_name_contains_any"):
         if key in locator:
             items = locator[key]
@@ -291,13 +342,39 @@ def _validate_locator(locator: Any, path: str, depth: int = 0) -> None:
         _validate_locator(locator["within"], f"{path}.within", depth + 1)
 
 
-def _validate_action(action: dict[str, Any], slots: set[str], private_results: set[str], index: int) -> None:
+def _validate_ax_locator_shape(locator: dict[str, Any]) -> None:
+    if "selector" in locator or "visible" in locator:
+        raise ProtocolError("AX locators do not accept DOM selector or visibility predicates")
+    if not AX_IDENTITY_KEYS.intersection(locator):
+        raise ProtocolError("AX locators require a semantic identity predicate")
+    if "within" in locator:
+        _validate_ax_locator_shape(locator["within"])
+
+
+def _validate_dom_locator_shape(locator: dict[str, Any]) -> None:
+    if set(locator).difference({"selector", "visible"}) or "selector" not in locator:
+        raise ProtocolError("DOM locators require only a selector and optional visibility")
+
+
+def _validate_action(
+    action: dict[str, Any],
+    slots: set[str],
+    private_results: set[str],
+    target: dict[str, Any],
+    index: int,
+) -> None:
     operation = action.get("op")
     if operation not in ALLOWED_OPERATIONS:
         raise ProtocolError("program contains an unsupported operation")
     _reject_unknown_keys(action, ACTION_KEYS[operation], f"action[{index}]")
+    if operation == "navigate_same_origin":
+        _validate_navigation_url(action.get("url"), target)
     if operation in LOCATOR_OPERATIONS:
         _validate_locator(action.get("locator"), f"action[{index}].locator")
+        if operation in DOM_LOCATOR_OPERATIONS:
+            _validate_dom_locator_shape(action["locator"])
+        else:
+            _validate_ax_locator_shape(action["locator"])
     if operation in {"wait_ax", "wait_dom"}:
         timeout = action.get("timeout_ms")
         if type(timeout) is not int or not 50 <= timeout <= 300000:
@@ -335,6 +412,13 @@ def _validate_action(action: dict[str, Any], slots: set[str], private_results: s
         maximum = 5000 if operation == "extract_ax_collection" else 100
         if type(max_items) is not int or not 1 <= max_items <= maximum:
             raise ProtocolError("extraction max_items is out of bounds")
+    if operation == "capture_viewport_private":
+        if action.get("private_result") not in private_results:
+            raise ProtocolError("screenshot references an undeclared private result")
+        if type(action.get("quality")) is not int or not 10 <= action["quality"] <= 90:
+            raise ProtocolError("screenshot quality is out of bounds")
+        if type(action.get("max_bytes")) is not int or not 16384 <= action["max_bytes"] <= 262144:
+            raise ProtocolError("screenshot max_bytes is out of bounds")
 
 
 def validate_program(program: Any) -> dict[str, Any]:
@@ -403,17 +487,36 @@ def validate_program(program: Any) -> dict[str, Any]:
     slot_set = set(slots)
     private_result_set = set(private)
     for index, action in enumerate(flat):
-        _validate_action(action, slot_set, private_result_set, index)
+        _validate_action(action, slot_set, private_result_set, program["target"], index)
     operations = [action["op"] for action in flat]
+    top_level_operations = [action.get("op") for action in raw_actions]
+    if (
+        top_level_operations[0] != "open_or_focus_exact_url"
+        or top_level_operations[-1] != "detach_debugger"
+        or top_level_operations.count("open_or_focus_exact_url") != 1
+        or top_level_operations.count("attach_debugger") != 1
+        or top_level_operations.count("detach_debugger") != 1
+        or operations.count("open_or_focus_exact_url") != 1
+        or operations.count("attach_debugger") != 1
+        or operations.count("detach_debugger") != 1
+        or operations.index("attach_debugger") >= operations.index("detach_debugger")
+    ):
+        raise ProtocolError("program lifecycle must open once, attach once, and detach last")
     boundary_count = operations.count("before_mutation")
     if capability == "read" and (boundary_count or MUTATION_ONLY.intersection(operations)):
         raise ProtocolError("read programs cannot contain mutation actions")
-    if capability == "mutation" and boundary_count != 1:
+    if capability == "mutation" and (
+        boundary_count != 1 or top_level_operations.count("before_mutation") != 1
+    ):
         raise ProtocolError("mutation programs require exactly one mutation boundary")
+    if capability == "mutation":
+        boundary_index = top_level_operations.index("before_mutation")
+        if "first_success" in top_level_operations[boundary_index + 1:]:
+            raise ProtocolError("mutation recovery branches must precede the mutation boundary")
     extracted = {
         action["private_result"]
         for action in flat
-        if action["op"] in {"extract_ax", "extract_ax_collection"}
+        if action["op"] in {"extract_ax", "extract_ax_collection", "capture_viewport_private"}
     }
     if extracted != private_result_set:
         raise ProtocolError("private result declarations must exactly match extraction actions")

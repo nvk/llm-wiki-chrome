@@ -77,6 +77,67 @@ class ProtocolTests(unittest.TestCase):
             with self.assertRaises(ProtocolError):
                 validate_program(program)
 
+    def test_same_origin_navigation_is_bounded_to_target_paths(self) -> None:
+        program = load_fixture("x-space-read-v1.json")
+        program["actions"].insert(3, {
+            "op": "navigate_same_origin",
+            "url": program["target"]["url"] + "?synthetic=1",
+        })
+        resign(program)
+        self.assertEqual(validate_program(program), program)
+
+        invalid_urls = (
+            "https://docs.google.com/document/d/SYNTHETIC_DOCUMENT/edit",
+            "https://x.com/unrelated/SYNTHETIC",
+            program["target"]["url"] + "_SIBLING",
+            program["target"]["url"] + "#fragment",
+        )
+        for url in invalid_urls:
+            invalid = copy.deepcopy(program)
+            invalid["actions"][3]["url"] = url
+            resign(invalid)
+            with self.subTest(url=url), self.assertRaisesRegex(ProtocolError, "navigation URL"):
+                validate_program(invalid)
+
+    def test_lifecycle_and_mutation_boundary_must_be_top_level(self) -> None:
+        program = load_fixture("x-space-read-v1.json")
+        program["actions"] = [
+            {"op": "open_or_focus_exact_url"},
+            {"op": "first_success", "branches": [[{"op": "attach_debugger"}]]},
+            {"op": "detach_debugger"},
+        ]
+        resign(program)
+        with self.assertRaisesRegex(ProtocolError, "lifecycle"):
+            validate_program(program)
+
+        program = load_fixture("google-docs-suggestions-v1.json")
+        boundary = next(action for action in program["actions"] if action["op"] == "before_mutation")
+        program["actions"].remove(boundary)
+        program["actions"].insert(-1, {"op": "first_success", "branches": [[boundary]]})
+        resign(program)
+        with self.assertRaisesRegex(ProtocolError, "mutation boundary"):
+            validate_program(program)
+
+    def test_locator_regex_subset_and_operation_shapes_fail_closed(self) -> None:
+        for pattern in ("(", "(a+)+$", r"^value\\1$"):
+            program = load_fixture("google-docs-suggestions-v1.json")
+            program["actions"][13]["locator"]["name_matches"] = pattern
+            resign(program)
+            with self.subTest(pattern=pattern), self.assertRaisesRegex(ProtocolError, "name_matches"):
+                validate_program(program)
+
+        program = load_fixture("x-space-read-v1.json")
+        program["actions"][3]["locator"]["visible"] = False
+        resign(program)
+        with self.assertRaisesRegex(ProtocolError, "AX locators"):
+            validate_program(program)
+
+        program = load_fixture("x-space-read-v1.json")
+        program["actions"][4]["branches"][1][0]["locator"]["role"] = "list"
+        resign(program)
+        with self.assertRaisesRegex(ProtocolError, "DOM locators"):
+            validate_program(program)
+
     def test_read_program_cannot_cross_mutation_boundary(self) -> None:
         program = load_fixture("x-space-read-v1.json")
         program["actions"].insert(-1, {"op": "before_mutation"})
@@ -104,6 +165,25 @@ class ProtocolTests(unittest.TestCase):
         resign(program)
         with self.assertRaisesRegex(ProtocolError, "max_items"):
             validate_program(program)
+
+    def test_private_viewport_capture_is_declared_and_bounded(self) -> None:
+        program = load_fixture("x-space-read-v1.json")
+        program["actions"].insert(-1, {
+            "op": "capture_viewport_private",
+            "private_result": "space.viewport",
+            "quality": 70,
+            "max_bytes": 262144,
+        })
+        program["result"]["private_fields"].append("space.viewport")
+        resign(program)
+        self.assertEqual(validate_program(program), program)
+
+        for field, value in (("quality", 91), ("max_bytes", 262145)):
+            invalid = copy.deepcopy(program)
+            invalid["actions"][-2][field] = value
+            resign(invalid)
+            with self.subTest(field=field), self.assertRaisesRegex(ProtocolError, "screenshot"):
+                validate_program(invalid)
 
         program = load_fixture("x-space-read-v1.json")
         program["result"]["private_fields"].append("space.unused")

@@ -9,29 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from browser_executor.protocol import canonical_program_sha256
-
 ROOT = Path(__file__).resolve().parents[1]
-
-NODE_HARNESS = r'''
-const fs = require("node:fs");
-globalThis.__program = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-globalThis.chrome = {
-  storage: {session: {set: async () => {}, get: async () => ({})}},
-  action: {setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}},
-  sidePanel: {setPanelBehavior: async () => {}},
-  runtime: {
-    connectNative: () => ({
-      postMessage: () => {},
-      onMessage: {addListener: () => {}},
-      onDisconnect: {addListener: () => {}},
-    }),
-    onInstalled: {addListener: () => {}},
-    onStartup: {addListener: () => {}},
-    onMessage: {addListener: () => {}},
-  },
-};
-'''
 
 
 class AdapterAndSecurityTests(unittest.TestCase):
@@ -44,6 +22,7 @@ class AdapterAndSecurityTests(unittest.TestCase):
         self.assertEqual(manifest["network"], "none")
         self.assertEqual(manifest["version"], extension["version"])
         self.assertNotIn("content_scripts", extension)
+        self.assertEqual(extension["background"]["type"], "module")
         self.assertNotIn("<all_urls>", extension["host_permissions"])
         self.assertEqual(set(extension["host_permissions"]), {
             "https://docs.google.com/*",
@@ -51,7 +30,10 @@ class AdapterAndSecurityTests(unittest.TestCase):
         })
 
     def test_service_worker_has_no_arbitrary_execution_or_provider_ui_logic(self) -> None:
-        source = (ROOT / "extension" / "service-worker.js").read_text(encoding="utf-8")
+        source = "\n".join(
+            (ROOT / "extension" / name).read_text(encoding="utf-8")
+            for name in ("service-worker.js", "protocol.mjs", "executor.mjs")
+        )
         forbidden = (
             "Runtime.evaluate",
             "eval(",
@@ -64,38 +46,36 @@ class AdapterAndSecurityTests(unittest.TestCase):
         for value in forbidden:
             with self.subTest(value=value):
                 self.assertNotIn(value, source)
-        self.assertIn('error: "typed-execution-disabled"', source)
+        self.assertIn("new BrowserExecutor", source)
+        self.assertIn('error: "invalid-program"', source)
+        self.assertNotIn("typed-execution-disabled", source)
 
     @unittest.skipUnless(shutil.which("node"), "Node is required for the MV3 contract check")
     def test_service_worker_independently_validates_signed_programs(self) -> None:
-        source = (ROOT / "extension" / "service-worker.js").read_text(encoding="utf-8")
-        tail = r'''
-validateProgram(globalThis.__program).then(() => {
+        harness = r'''
+import fs from "node:fs";
+import {validateProgram} from "./extension/protocol.mjs";
+const program = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+validateProgram(program).then(() => {
   process.stdout.write("ok\n");
 }).catch((error) => {
   process.stderr.write(String(error.message || error) + "\n");
   process.exitCode = 2;
 });
 '''
-        with tempfile.TemporaryDirectory() as temporary:
-            for name in ("google-docs-suggestions-v1.json", "x-space-read-v1.json"):
-                program = json.loads((ROOT / "tests" / "fixtures" / name).read_text(encoding="utf-8"))
-                if name.startswith("x-"):
-                    program["actions"][3]["locator"]["name_contains_any"][0] = "spáce"
-                    program["program_sha256"] = canonical_program_sha256(program)
-                program_path = Path(temporary) / name
-                program_path.write_text(json.dumps(program, ensure_ascii=False), encoding="utf-8")
-                with self.subTest(name=name):
-                    completed = subprocess.run(
-                        ["node", "-e", NODE_HARNESS + source + tail, str(program_path)],
-                        cwd=ROOT,
-                        capture_output=True,
-                        text=True,
-                        timeout=10,
-                        check=False,
-                    )
-                    self.assertEqual(completed.returncode, 0, completed.stderr)
-                    self.assertEqual(completed.stdout, "ok\n")
+        for name in ("google-docs-suggestions-v1.json", "x-space-read-v1.json"):
+            program_path = ROOT / "tests" / "fixtures" / name
+            with self.subTest(name=name):
+                completed = subprocess.run(
+                    ["node", "--input-type=module", "-e", harness, str(program_path)],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual(completed.stdout, "ok\n")
 
     def test_side_panel_is_status_only(self) -> None:
         html = (ROOT / "extension" / "sidepanel.html").read_text(encoding="utf-8")

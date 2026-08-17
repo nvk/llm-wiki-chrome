@@ -12,7 +12,10 @@ from .protocol import BROWSER_PROTOCOL, ProtocolError, validate_program
 from .storage import StorageError, native_socket_path, validate_private_socket
 
 MAX_MESSAGE_BYTES = 1_048_576
+MAX_PRIVATE_VALUE_BYTES = 16_384
+MAX_PRIVATE_VALUES_BYTES = 262_144
 ERROR_CODE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+RESULT_KEYS = {"protocol", "type", "job_id", "status", "public", "private", "error"}
 
 
 class ClientError(RuntimeError):
@@ -56,6 +59,11 @@ def _validate_private_values(program: dict[str, Any], values: Any) -> dict[str, 
         raise ProtocolError("private_values do not exactly match declared private slots")
     if not all(isinstance(value, str) for value in values.values()):
         raise ProtocolError("private_values must contain strings")
+    if any(len(value.encode("utf-8")) > MAX_PRIVATE_VALUE_BYTES for value in values.values()):
+        raise ProtocolError("private_values contains an oversized value")
+    encoded = json.dumps(values, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    if len(encoded) > MAX_PRIVATE_VALUES_BYTES:
+        raise ProtocolError("private_values is too large")
     return dict(values)
 
 
@@ -65,6 +73,9 @@ def _validate_result(
     program: dict[str, Any],
     authorized: bool,
 ) -> dict[str, Any]:
+    result_shape = frozenset(message)
+    if result_shape not in {frozenset(RESULT_KEYS), frozenset(RESULT_KEYS - {"error"})}:
+        raise ClientError("browser executor returned an invalid result shape")
     if message.get("type") != "result" or message.get("job_id") != job_id:
         raise ClientError("browser executor returned a result for another job")
     status = message.get("status")
@@ -83,8 +94,24 @@ def _validate_result(
     if status == "ok" and program["capability"] == "mutation" and not authorized:
         raise ClientError("browser executor reported mutation success without authorization")
     error = message.get("error")
-    if error is not None and (not isinstance(error, str) or not ERROR_CODE.fullmatch(error)):
+    if status == "ok" and "error" in message:
+        raise ClientError("browser executor returned an error with success")
+    if status == "error" and (not isinstance(error, str) or not ERROR_CODE.fullmatch(error)):
         raise ClientError("browser executor returned a non-generic error")
+    if "status" in public and public["status"] != status:
+        raise ClientError("browser executor public status does not match")
+    if "action_count" in public and (
+        type(public["action_count"]) is not int
+        or not 0 <= public["action_count"] <= program["limits"]["max_actions"]
+    ):
+        raise ClientError("browser executor returned an invalid action count")
+    if "mutation_started" in public and not isinstance(public["mutation_started"], bool):
+        raise ClientError("browser executor returned an invalid mutation state")
+    if "private_result_count" in public and (
+        type(public["private_result_count"]) is not int
+        or public["private_result_count"] != len(private)
+    ):
+        raise ClientError("browser executor returned an invalid private result count")
     return {"status": status, "public": public, "private": private, **({"error": error} if error else {})}
 
 
@@ -136,6 +163,8 @@ class BrowserExecutorClient:
                 except socket.timeout as exc:
                     raise ClientError("timed out waiting for the browser executor") from exc
                 if message.get("type") == "before-mutation":
+                    if set(message) != {"protocol", "type", "job_id"}:
+                        raise ClientError("browser executor returned an invalid mutation boundary")
                     if validated["capability"] != "mutation" or message.get("job_id") != job_id:
                         raise ClientError("browser executor returned an unexpected mutation boundary")
                     if authorized:
