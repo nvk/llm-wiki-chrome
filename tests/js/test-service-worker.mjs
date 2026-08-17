@@ -173,10 +173,10 @@ async function waitFor(predicate) {
   throw new Error("Timed out waiting for synthetic extension state");
 }
 
-async function runtimeMessage(message) {
+async function runtimeMessage(message, sender = {}) {
   const listener = chrome.runtime.onMessage.listeners[0];
   return new Promise((resolve) => {
-    const asynchronous = listener(message, {}, resolve);
+    const asynchronous = listener(message, sender, resolve);
     if (asynchronous === false) queueMicrotask(() => resolve(undefined));
   });
 }
@@ -185,6 +185,12 @@ await import("../../extension/service-worker.js");
 nativePort.onMessage.emit({protocol: PROTOCOL, type: "ready"});
 await waitFor(() => panelBehavior);
 assert.deepEqual(panelBehavior, {openPanelOnActionClick: false});
+
+// A runtime message from a different extension id must be ignored entirely:
+// no grant is created and the listener returns no asynchronous response.
+assert.equal(await runtimeMessage({type: "connect-active-tab"}, {id: "other-extension-id"}), undefined);
+assert.equal(stored.collaborationWorkspace?.collaborations?.length ?? 0, 0);
+assert.equal(await runtimeMessage({type: "stop-all-collaborations"}, {id: "other-extension-id"}), undefined);
 
 assert.equal((await runtimeMessage({type: "connect-active-tab"})).connected, true);
 await waitFor(() => stored.collaborationWorkspace?.collaborations?.length === 1);
