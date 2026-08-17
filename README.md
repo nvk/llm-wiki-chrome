@@ -1,4 +1,4 @@
-# LLM Wiki Browser Execution Adapter
+# LLM Wiki for Chrome
 
 Private, content-free execution substrate for targeted llm-wiki adapters. It
 provides one Chrome extension, one allowlisted Native Messaging host, a private
