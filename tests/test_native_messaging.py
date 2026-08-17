@@ -8,6 +8,8 @@ import stat
 import struct
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -28,6 +30,7 @@ from browser_executor.protocol import BROWSER_PROTOCOL
 from browser_executor.storage import (
     SAFE_UNIX_SOCKET_PATH_BYTES,
     StorageError,
+    native_socket_candidates,
     native_socket_path,
     validate_private_socket,
 )
@@ -66,6 +69,43 @@ class NativeMessagingTests(unittest.TestCase):
             })
             mode = stat.S_IMODE((Path(temporary) / "private").stat().st_mode)
             self.assertEqual(mode, 0o700)
+
+    def test_live_relays_use_discoverable_unique_instance_sockets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary) / "private" / "s"
+            output = io.BytesIO()
+            read_fd, write_fd = os.pipe()
+            reader = os.fdopen(read_fd, "rb", buffering=0)
+            writer = os.fdopen(write_fd, "wb", buffering=0)
+            relay = NativeRelay(reader, output, base)
+            failure: list[BaseException] = []
+
+            def serve() -> None:
+                try:
+                    relay.run()
+                except BaseException as exc:
+                    failure.append(exc)
+
+            thread = threading.Thread(target=serve, daemon=True)
+            thread.start()
+            try:
+                deadline = time.monotonic() + 2
+                candidates = []
+                while time.monotonic() < deadline:
+                    candidates = native_socket_candidates(base)
+                    if candidates:
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(len(candidates), 1)
+                self.assertRegex(candidates[0].name, r"^s\.[a-f0-9]{8}$")
+                self.assertFalse(base.exists())
+            finally:
+                writer.close()
+                thread.join(timeout=2)
+                reader.close()
+            if failure:
+                raise failure[0]
+            self.assertFalse(native_socket_candidates(base))
 
     def test_second_concurrent_agent_fails_closed(self) -> None:
         relay = NativeRelay(io.BytesIO(), io.BytesIO(), Path("/tmp/synthetic-relay.sock"))
@@ -206,7 +246,6 @@ class NativeMessagingTests(unittest.TestCase):
             state = base / "state"
             with mock.patch.dict(os.environ, {
                 "LLM_WIKI_BROWSER_EXECUTOR_STATE_DIR": str(state),
-                "LLM_WIKI_BROWSER_EXECUTOR_NATIVE_SOCKET": str(state / "relay.sock"),
             }, clear=False):
                 installed = install_native_host(repository, hosts)
                 manifest = json.loads(installed["manifest_path"].read_text(encoding="utf-8"))

@@ -9,6 +9,7 @@
     "activeTab",
     "debugger",
     "nativeMessaging",
+    "scripting",
     "sidePanel",
     "storage"
   ],

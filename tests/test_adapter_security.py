@@ -25,6 +25,7 @@ class AdapterAndSecurityTests(unittest.TestCase):
         self.assertEqual(extension["background"]["type"], "module")
         self.assertEqual(extension["host_permissions"], [])
         self.assertIn("activeTab", extension["permissions"])
+        self.assertIn("scripting", extension["permissions"])
 
     def test_service_worker_has_no_arbitrary_execution_or_provider_ui_logic(self) -> None:
         source = "\n".join(
@@ -112,6 +113,14 @@ validateProgram(program).then(() => {
         self.assertNotIn('"browser_execute"', source)
         self.assertNotIn('"javascript"', source.lower())
         self.assertNotIn('"natural_language"', source.lower())
+
+    def test_collaboration_marker_is_fixed_noninteractive_and_content_blind(self) -> None:
+        source = (ROOT / "extension" / "collaboration-marker.js").read_text(encoding="utf-8")
+        self.assertIn("pointer-events: none", source)
+        self.assertIn("llm-wiki-collaboration-revoke", source)
+        for forbidden in ("innerText", "textContent.trim", "querySelector", "fetch(", "XMLHttpRequest"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
 
     def test_describe_matches_manifest(self) -> None:
         manifest = json.loads((ROOT / ".llm-wiki-adapter.json").read_text(encoding="utf-8"))

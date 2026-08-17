@@ -110,14 +110,43 @@ async function publishWorkspace(workspace) {
   });
 }
 
+async function showCollaborationMarker(value) {
+  if (!chrome.scripting?.executeScript || !Number.isInteger(value?.tab_id)) return;
+  await chrome.scripting.executeScript({
+    target: {tabId: value.tab_id},
+    files: ["collaboration-marker.js"],
+  }).catch(() => {});
+}
+
+async function clearCollaborationMarker(value) {
+  if (!chrome.tabs?.sendMessage || !Number.isInteger(value?.tab_id)) return;
+  await chrome.tabs.sendMessage(value.tab_id, {
+    type: "llm-wiki-collaboration-revoke",
+  }).catch(() => {});
+}
+
 async function persistWorkspace(workspace, removed = []) {
   await chrome.storage.session.set({[COLLABORATION_STATE_KEY]: workspace});
   for (const value of removed) {
+    await clearCollaborationMarker(value);
     await chrome.action.setBadgeText({tabId: value.tab_id, text: ""}).catch(() => {});
+    if (chrome.action?.setTitle) {
+      await chrome.action.setTitle({
+        tabId: value.tab_id,
+        title: "LLM Wiki Browser Executor",
+      }).catch(() => {});
+    }
   }
   for (const value of workspace.collaborations) {
+    await showCollaborationMarker(value);
     await chrome.action.setBadgeBackgroundColor({tabId: value.tab_id, color: "#317258"}).catch(() => {});
     await chrome.action.setBadgeText({tabId: value.tab_id, text: "ON"}).catch(() => {});
+    if (chrome.action?.setTitle) {
+      await chrome.action.setTitle({
+        tabId: value.tab_id,
+        title: "LLM Wiki agent controls this tab",
+      }).catch(() => {});
+    }
   }
   await publishWorkspace(workspace).catch(() => {});
 }
@@ -492,7 +521,9 @@ async function handleNativeMessage(message, port) {
 async function configureExtension() {
   connectNativeBridge();
   await setJobState(null).catch(() => {});
-  await publishWorkspace(await checkedWorkspace()).catch(() => {});
+  const workspace = await checkedWorkspace();
+  await Promise.all(workspace.collaborations.map(showCollaborationMarker)).catch(() => {});
+  await publishWorkspace(workspace).catch(() => {});
 }
 
 chrome.runtime.onInstalled.addListener(configureExtension);
@@ -506,9 +537,13 @@ chrome.action.onClicked.addListener((tab) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (typeof changeInfo.url !== "string") return;
-  if (activeJob?.tabId === tabId) cancelActiveJob();
-  checkedWorkspace().catch(() => {});
+  if (typeof changeInfo.url === "string" && activeJob?.tabId === tabId) cancelActiveJob();
+  if (typeof changeInfo.url !== "string" && changeInfo.status !== "complete") return;
+  checkedWorkspace().then((workspace) => {
+    if (changeInfo.status !== "complete") return;
+    const value = workspace.collaborations.find((candidate) => candidate.tab_id === tabId);
+    if (value) showCollaborationMarker(value).catch(() => {});
+  }).catch(() => {});
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {

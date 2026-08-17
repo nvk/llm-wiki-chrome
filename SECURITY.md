@@ -20,6 +20,18 @@ grant on same-origin navigation, revoke it on cross-origin navigation or close,
 and display only its hostname in the side panel. A local agent or targeted
 adapter may retrieve exact targets only through the private user-owned socket.
 
+Each Chrome extension process gets a random eight-hex socket suffix below the
+configured private base path. The client accepts only the legacy exact base or
+that strict suffix shape, validates owner and mode on every candidate, merges
+only validated collaboration records, and requires exactly one owning relay
+before routing a multi-process job. Stale or unreachable sockets are ignored.
+
+The visible page-control marker is a packaged, fixed, noninteractive overlay.
+It uses the click-created `activeTab` plus `scripting` permission, reads no page
+content, exposes no messaging other than its fixed revoke signal, and is not a
+manifest content script. Marker injection failure does not broaden or preserve
+a grant.
+
 The direct agent surface requires a collaboration ID obtained from
 `browser_tabs` on every read or interaction. It supports only bounded AX
 snapshots, viewport screenshots, semantic AX clicks, private text insertion,

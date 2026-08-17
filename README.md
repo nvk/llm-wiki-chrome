@@ -24,6 +24,11 @@ Same-origin navigation rotates the exact grant ID and URL so stale programs
 fail closed. A grant is revoked when the tab leaves its origin, closes, or the
 user stops that tab or the whole workspace in the side panel.
 
+An active grant is visible on the page as a fixed green outline and
+`LLM WIKI • CONTROLLED` pill, plus an `ON` action badge. The marker is packaged,
+noninteractive, content-blind, and injected only after the extension click; it
+is removed when the grant is revoked and never receives page or job content.
+
 The local agent and targeted adapters retrieve the private workspace through
 the native socket. A direct agent must first list the exact clicked grants and
 name one collaboration ID on every tool call. The server then compiles a fixed
@@ -81,6 +86,10 @@ bounded execution slice:
 - exact HTTPS target and bounded action declarations;
 - click-created active-tab grants with no persistent host permissions;
 - a bounded multi-tab collaboration workspace with private exact-URL lookup;
+- per-Chrome-instance native sockets aggregated by the local client, so several
+  Chrome profiles or processes cannot overwrite one another's shared tabs;
+- a fixed page outline/pill and toolbar badge showing exactly which tabs are
+  controlled;
 - a content-free side-panel workspace, progress meter, per-tab revocation, and cancellation;
 - separate read and mutation capabilities;
 - one governed mutation callback in the Python client;
@@ -224,6 +233,12 @@ exposes raw diagnostic methods or request interception. A separate paired
 `Runtime.consoleAPICalled` types, timestamps, and scalar arguments. It ignores
 contexts, stacks, descriptions, previews, and object IDs and never allows
 evaluation, compilation, function calls, script execution, or property access.
+Each Chrome native-host process binds a unique private socket below the one
+configured base path. The client discovers only those strictly named sockets,
+aggregates their explicit collaboration workspaces, and routes a job to the
+single host that owns its exact grant. This prevents multiple Chrome profiles
+from replacing one another's relay while preserving one exact tab per job.
+
 The executor is trusted local code, not an operating-system sandbox. Targeted
 adapters remain responsible for authorizing every consequential provider effect
 and proving the provider's final state independently. Direct mutation tools

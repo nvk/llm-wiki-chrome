@@ -33,6 +33,145 @@ def send_line(connection: socket.socket, value: dict) -> None:
 
 
 class ClientTests(unittest.TestCase):
+    def test_collaborations_aggregate_multiple_chrome_native_hosts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary) / "executor.sock"
+            paths = [Path(f"{base}.aaaaaaaa"), Path(f"{base}.bbbbbbbb")]
+            responses = [
+                {
+                    "protocol": BROWSER_PROTOCOL,
+                    "type": "collaboration-list",
+                    "selected_collaboration_id": "a" * 64,
+                    "collaborations": [{
+                        "collaboration_id": "a" * 64,
+                        "url": "https://one.invalid/private",
+                        "origin": "https://one.invalid",
+                    }],
+                },
+                {
+                    "protocol": BROWSER_PROTOCOL,
+                    "type": "collaboration-list",
+                    "selected_collaboration_id": "b" * 64,
+                    "collaborations": [{
+                        "collaboration_id": "b" * 64,
+                        "url": "https://two.invalid/private",
+                        "origin": "https://two.invalid",
+                    }],
+                },
+            ]
+            failures: list[BaseException] = []
+            threads = []
+            for path, response in zip(paths, responses):
+                server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                server.bind(str(path))
+                path.chmod(0o600)
+                server.listen(1)
+
+                def serve(
+                    current_server: socket.socket = server,
+                    current_response: dict = response,
+                ) -> None:
+                    try:
+                        connection, _ = current_server.accept()
+                        with connection:
+                            self.assertEqual(receive_line(connection)["type"], "collaboration-list-query")
+                            send_line(connection, current_response)
+                    except BaseException as exc:
+                        failures.append(exc)
+                    finally:
+                        current_server.close()
+
+                thread = threading.Thread(target=serve, daemon=True)
+                thread.start()
+                threads.append(thread)
+            result = BrowserExecutorClient(base, timeout_seconds=10).collaborations()
+            for thread in threads:
+                thread.join(timeout=2)
+            if failures:
+                raise failures[0]
+            self.assertEqual(
+                {value["collaboration_id"] for value in result},
+                {"a" * 64, "b" * 64},
+            )
+
+    def test_multi_chrome_job_routes_to_the_host_owning_the_exact_grant(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary) / "executor.sock"
+            paths = [Path(f"{base}.aaaaaaaa"), Path(f"{base}.bbbbbbbb")]
+            program = fixture("x-space-read-v1.json")
+            target = {
+                "collaboration_id": program["target"]["collaboration_id"],
+                "url": program["target"]["url"],
+                "origin": program["target"]["origin"],
+            }
+            workspaces = [
+                {
+                    "protocol": BROWSER_PROTOCOL,
+                    "type": "collaboration-list",
+                    "selected_collaboration_id": None,
+                    "collaborations": [],
+                },
+                {
+                    "protocol": BROWSER_PROTOCOL,
+                    "type": "collaboration-list",
+                    "selected_collaboration_id": target["collaboration_id"],
+                    "collaborations": [target],
+                },
+            ]
+            failures: list[BaseException] = []
+            threads = []
+            for index, (path, workspace) in enumerate(zip(paths, workspaces)):
+                server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                server.bind(str(path))
+                path.chmod(0o600)
+                server.listen(2)
+
+                def serve(
+                    current_server: socket.socket = server,
+                    current_workspace: dict = workspace,
+                    owns_target: bool = index == 1,
+                ) -> None:
+                    try:
+                        connection, _ = current_server.accept()
+                        with connection:
+                            self.assertEqual(receive_line(connection)["type"], "collaboration-list-query")
+                            send_line(connection, current_workspace)
+                        if owns_target:
+                            connection, _ = current_server.accept()
+                            with connection:
+                                job = receive_line(connection)
+                                self.assertEqual(job["program"]["target"]["collaboration_id"], target["collaboration_id"])
+                                send_line(connection, {
+                                    "protocol": BROWSER_PROTOCOL,
+                                    "type": "result",
+                                    "job_id": job["job_id"],
+                                    "status": "ok",
+                                    "public": {
+                                        "status": "ok",
+                                        "action_count": 8,
+                                        "private_result_count": 2,
+                                    },
+                                    "private": {
+                                        "space.attendees": [],
+                                        "space.metadata": [],
+                                    },
+                                })
+                    except BaseException as exc:
+                        failures.append(exc)
+                    finally:
+                        current_server.close()
+
+                thread = threading.Thread(target=serve, daemon=True)
+                thread.start()
+                threads.append(thread)
+            result = BrowserExecutorClient(base, timeout_seconds=10).run(program)
+            for thread in threads:
+                thread.join(timeout=2)
+            if failures:
+                raise failures[0]
+            self.assertEqual(result["status"], "ok")
+            self.assertFalse(any(thread.is_alive() for thread in threads))
+
     def collaboration_server(self, response: dict, operation: Callable[[BrowserExecutorClient], object] | None = None):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "executor.sock"

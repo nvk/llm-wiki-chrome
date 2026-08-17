@@ -10,7 +10,12 @@ from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from .protocol import BROWSER_PROTOCOL, ProtocolError, validate_program
-from .storage import StorageError, native_socket_path, validate_private_socket
+from .storage import (
+    StorageError,
+    native_socket_candidates,
+    native_socket_path,
+    validate_private_socket,
+)
 
 MAX_MESSAGE_BYTES = 1_048_576
 MAX_PRIVATE_VALUE_BYTES = 16_384
@@ -124,16 +129,29 @@ class BrowserExecutorClient:
         self.socket_path = (socket_path or native_socket_path()).resolve(strict=False)
         self.timeout_seconds = max(10, min(timeout_seconds, 300))
 
-    def _query_connector(self, message_type: str) -> dict[str, Any]:
+    def _connector_candidates(self) -> list[Path]:
+        candidates = native_socket_candidates(self.socket_path)
+        private = []
+        for candidate in candidates:
+            try:
+                validate_private_socket(candidate)
+            except StorageError:
+                continue
+            private.append(candidate)
+        if not private:
+            raise ClientError("browser executor connector is offline or not private")
+        return private
+
+    def _query_connector(self, message_type: str, socket_path: Path) -> dict[str, Any]:
         try:
-            validate_private_socket(self.socket_path)
+            validate_private_socket(socket_path)
         except StorageError as exc:
             raise ClientError("browser executor connector is offline or not private") from exc
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         connection.settimeout(min(5.0, float(self.timeout_seconds)))
         try:
             try:
-                connection.connect(str(self.socket_path))
+                connection.connect(str(socket_path))
             except OSError as exc:
                 raise ClientError("browser executor connector is unavailable") from exc
             _send_line(connection, {
@@ -174,8 +192,7 @@ class BrowserExecutorClient:
             "origin": raw_origin,
         }
 
-    def _collaboration_workspace(self) -> dict[str, Any]:
-        message = self._query_connector("collaboration-list-query")
+    def _validate_collaboration_workspace(self, message: dict[str, Any]) -> dict[str, Any]:
         if set(message) != {
             "protocol", "type", "selected_collaboration_id", "collaborations",
         } or message.get("type") != "collaboration-list":
@@ -200,14 +217,43 @@ class BrowserExecutorClient:
             "collaborations": collaborations,
         }
 
+    def _collaboration_workspaces(self) -> list[tuple[Path, dict[str, Any]]]:
+        workspaces = []
+        for candidate in self._connector_candidates():
+            try:
+                message = self._query_connector("collaboration-list-query", candidate)
+                workspace = self._validate_collaboration_workspace(message)
+            except ClientError:
+                continue
+            workspaces.append((candidate, workspace))
+        if not workspaces:
+            raise ClientError("browser executor connector is unavailable")
+        identifiers = [
+            collaboration["collaboration_id"]
+            for _path, workspace in workspaces
+            for collaboration in workspace["collaborations"]
+        ]
+        if len(identifiers) != len(set(identifiers)):
+            raise ClientError("browser executor returned duplicate collaboration targets")
+        return workspaces
+
     def collaborations(self) -> list[dict[str, str]]:
         """Return every exact HTTPS tab the user explicitly shared."""
-        workspace = self._collaboration_workspace()
-        selected = workspace["selected_collaboration_id"]
-        return sorted(
-            workspace["collaborations"],
-            key=lambda value: value["collaboration_id"] != selected,
-        )
+        collaborations = []
+        for path, workspace in self._collaboration_workspaces():
+            selected = workspace["selected_collaboration_id"]
+            for value in workspace["collaborations"]:
+                collaborations.append((
+                    value["collaboration_id"] != selected,
+                    str(path),
+                    value,
+                ))
+        return [
+            value for _not_selected, _path, value in sorted(
+                collaborations,
+                key=lambda item: (item[0], item[1], item[2]["collaboration_id"]),
+            )
+        ]
 
     def collaboration_for_url(self, raw_url: str) -> dict[str, str] | None:
         """Return the unique explicit grant for an exact HTTPS URL."""
@@ -228,12 +274,33 @@ class BrowserExecutorClient:
 
     def current_collaboration(self) -> dict[str, str] | None:
         """Return the most recently selected explicit tab, preserving the v1 client API."""
-        workspace = self._collaboration_workspace()
-        selected = workspace["selected_collaboration_id"]
-        return next((
-            value for value in workspace["collaborations"]
-            if value["collaboration_id"] == selected
-        ), None)
+        for _path, workspace in self._collaboration_workspaces():
+            selected = workspace["selected_collaboration_id"]
+            value = next((
+                value for value in workspace["collaborations"]
+                if value["collaboration_id"] == selected
+            ), None)
+            if value is not None:
+                return value
+        return None
+
+    def _connector_for_program(self, program: dict[str, Any]) -> Path:
+        candidates = self._connector_candidates()
+        if len(candidates) == 1:
+            return candidates[0]
+        target = program["target"]
+        matches = []
+        for candidate, workspace in self._collaboration_workspaces():
+            if any(
+                value["collaboration_id"] == target["collaboration_id"]
+                and value["url"] == target["url"]
+                and value["origin"] == target["origin"]
+                for value in workspace["collaborations"]
+            ):
+                matches.append(candidate)
+        if len(matches) != 1:
+            raise ClientError("the exact clicked-tab grant is unavailable or ambiguous")
+        return matches[0]
 
     def run(
         self,
@@ -246,8 +313,9 @@ class BrowserExecutorClient:
         values = _validate_private_values(validated, private_values)
         if validated["capability"] == "mutation" and before_mutation is None:
             raise ProtocolError("mutation jobs require a before_mutation callback")
+        connector_path = self._connector_for_program(validated)
         try:
-            validate_private_socket(self.socket_path)
+            validate_private_socket(connector_path)
         except StorageError as exc:
             raise ClientError("browser executor connector is offline or not private") from exc
         job_id = os.urandom(18).hex()
@@ -264,7 +332,7 @@ class BrowserExecutorClient:
         connection.settimeout(min(5.0, float(self.timeout_seconds)))
         try:
             try:
-                connection.connect(str(self.socket_path))
+                connection.connect(str(connector_path))
             except OSError as exc:
                 raise ClientError("browser executor connector is unavailable") from exc
             _send_line(connection, job)

@@ -18,10 +18,12 @@ from urllib.parse import urlsplit
 
 from .protocol import BROWSER_PROTOCOL
 from .storage import (
+    NATIVE_SOCKET_INSTANCE_SUFFIX_BYTES,
     SAFE_UNIX_SOCKET_PATH_BYTES,
     ensure_private_directory,
     ensure_socket_parent,
     native_socket_path,
+    native_socket_candidates,
     state_root,
     write_private_json,
 )
@@ -140,7 +142,10 @@ def install_native_host(
     durable_root = state_root()
     ensure_private_directory(durable_root)
     connector_path = (socket_path or native_socket_path()).expanduser().resolve(strict=False)
-    if len(os.fsencode(str(connector_path))) > SAFE_UNIX_SOCKET_PATH_BYTES:
+    if (
+        len(os.fsencode(str(connector_path))) + NATIVE_SOCKET_INSTANCE_SUFFIX_BYTES
+        > SAFE_UNIX_SOCKET_PATH_BYTES
+    ):
         raise NativeMessagingError("native connector socket path is too long")
     ensure_socket_parent(connector_path)
     wrapper = durable_root / "native-host"
@@ -188,7 +193,7 @@ def connector_status(
             installed = False
     return {
         "installed": installed,
-        "connected": (socket_path or native_socket_path()).expanduser().resolve(strict=False).is_socket(),
+        "connected": bool(native_socket_candidates(socket_path or native_socket_path())),
         "extension_id": extension_id_from_manifest(),
     }
 
@@ -292,6 +297,7 @@ class NativeRelay:
     def __init__(self, input_stream: BinaryIO, output_stream: BinaryIO, socket_path: Path) -> None:
         self.input_stream = input_stream
         self.output_stream = output_stream
+        self.socket_base_path = socket_path
         self.socket_path = socket_path
         self.output_lock = threading.Lock()
         self.agent_lock = threading.Lock()
@@ -440,12 +446,12 @@ class NativeRelay:
             threading.Thread(target=self._handle_agent, args=(connection,), daemon=True).start()
 
     def run(self) -> None:
-        ensure_socket_parent(self.socket_path)
-        if self.socket_path.exists() or self.socket_path.is_symlink():
-            if self.socket_path.is_socket() or self.socket_path.is_symlink():
-                self.socket_path.unlink()
-            else:
-                raise NativeMessagingError("native connector socket path is not a socket")
+        base_path = self.socket_base_path
+        ensure_socket_parent(base_path)
+        instance_path = Path(f"{base_path}.{os.urandom(4).hex()}")
+        if len(os.fsencode(str(instance_path))) > SAFE_UNIX_SOCKET_PATH_BYTES:
+            raise NativeMessagingError("native connector socket path is too long")
+        self.socket_path = instance_path
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             self.server.bind(str(self.socket_path))

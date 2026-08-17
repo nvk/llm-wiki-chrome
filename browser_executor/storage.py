@@ -7,6 +7,7 @@ import stat
 from pathlib import Path
 
 SAFE_UNIX_SOCKET_PATH_BYTES = 90
+NATIVE_SOCKET_INSTANCE_SUFFIX_BYTES = 9
 
 
 class StorageError(RuntimeError):
@@ -25,11 +26,38 @@ def native_socket_path() -> Path:
     if override:
         return Path(override).expanduser().resolve(strict=False)
     candidate = state_root() / "native-bridge.sock"
-    if len(os.fsencode(str(candidate))) <= SAFE_UNIX_SOCKET_PATH_BYTES:
+    if (
+        len(os.fsencode(str(candidate))) + NATIVE_SOCKET_INSTANCE_SUFFIX_BYTES
+        <= SAFE_UNIX_SOCKET_PATH_BYTES
+    ):
         return candidate
     digest = hashlib.sha256(str(candidate).encode("utf-8")).hexdigest()[:12]
     user_id = getattr(os, "getuid", lambda: 0)()
-    return Path("/tmp") / f"llm-wiki-browser-{user_id}-{digest}" / "bridge.sock"
+    return Path("/tmp") / f"lwb-{user_id}-{digest}" / "s"
+
+
+def native_socket_candidates(base_path: Path) -> list[Path]:
+    """Return legacy and per-Chrome connector sockets below one private base path."""
+    base = base_path.expanduser().resolve(strict=False)
+    try:
+        entries = list(base.parent.iterdir())
+    except OSError:
+        return []
+    prefix = base.name + "."
+    candidates = []
+    for entry in entries:
+        name = entry.name
+        if entry == base or (
+            name.startswith(prefix)
+            and len(name) == len(prefix) + 8
+            and all(character in "0123456789abcdef" for character in name[-8:])
+        ):
+            try:
+                if entry.is_socket():
+                    candidates.append(entry)
+            except OSError:
+                continue
+    return sorted(candidates, key=lambda value: (value != base, value.name))
 
 
 def ensure_private_directory(path: Path) -> None:
