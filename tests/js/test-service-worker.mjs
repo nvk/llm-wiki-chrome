@@ -167,6 +167,11 @@ assert.equal(readResult.status, "ok");
 assert.deepEqual(readResult.public, {status: "ok"});
 assert.deepEqual(readResult.private, {});
 assert.equal(attached, false);
+await new Promise((resolve) => setTimeout(resolve, 0));
+assert.deepEqual(stored.nativeConnectorState, {
+  state: "connected",
+  detail: "Ready for an exact-target job.",
+});
 
 await new Promise((resolve) => setTimeout(resolve, 0));
 const mutationProgram = await program("mutation");
@@ -179,6 +184,8 @@ nativePort.onMessage.emit({
   private_values: {},
 });
 await nativePort.next((message) => message.type === "before-mutation", mutationStart);
+await new Promise((resolve) => setTimeout(resolve, 0));
+assert.equal(stored.nativeConnectorState.state, "authorizing");
 nativePort.onMessage.emit({
   protocol: PROTOCOL,
   type: "mutation-authorized",
@@ -189,6 +196,8 @@ const mutationResult = await nativePort.next((message) => message.type === "resu
 assert.equal(mutationResult.status, "ok");
 assert.deepEqual(mutationResult.public, {status: "ok"});
 assert.equal(attached, false);
+await new Promise((resolve) => setTimeout(resolve, 0));
+assert.equal(stored.nativeConnectorState.state, "connected");
 
 await new Promise((resolve) => setTimeout(resolve, 0));
 const invalidStart = nativePort.sent.length;

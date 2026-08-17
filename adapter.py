@@ -45,9 +45,9 @@ def synthetic_program() -> dict[str, Any]:
         "driver": {"id": "synthetic-driver", "version": "1"},
         "capability": "read",
         "target": {
-            "url": "https://example.invalid/synthetic",
-            "origin": "https://example.invalid",
-            "path_prefixes": ["/synthetic"],
+            "url": "https://x.com/i/spaces/SYNTHETIC_SELF_TEST",
+            "origin": "https://x.com",
+            "path_prefixes": ["/i/spaces/SYNTHETIC_SELF_TEST"],
         },
         "limits": {"timeout_ms": 1000, "max_actions": 4, "max_repeat": 1},
         "private_slots": [],

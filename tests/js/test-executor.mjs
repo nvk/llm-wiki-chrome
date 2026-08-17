@@ -12,14 +12,18 @@ function property(name, value) {
   return {name, value: {value}};
 }
 
-function axNode({id, parentId, role, name, value, focused = false, backendDOMNodeId}) {
+function axNode({id, parentId, role, name, value, description, url, focused = false, backendDOMNodeId}) {
   return {
     nodeId: id,
     ...(parentId ? {parentId} : {}),
     role: {value: role},
     name: {value: name},
     ...(value === undefined ? {} : {value: {value}}),
-    properties: [property("focused", focused)],
+    ...(description === undefined ? {} : {description: {value: description}}),
+    properties: [
+      property("focused", focused),
+      ...(url === undefined ? [] : [property("url", url)]),
+    ],
     ignored: false,
     ...(backendDOMNodeId === undefined ? {} : {backendDOMNodeId}),
   };
@@ -38,6 +42,7 @@ class FakeChrome {
     this.commands = [];
     this.queries = [];
     this.clicks = 0;
+    this.scrolls = 0;
 
     this.tabs = {
       query: async (query) => {
@@ -106,9 +111,20 @@ class FakeChrome {
     }
     return [
       axNode({id: "root", role: "main", name: "Synthetic space"}),
-      axNode({id: "people", parentId: "root", role: "dialog", name: "People listeners"}),
+      axNode({
+        id: "people", parentId: "root", role: "dialog", name: "People listeners",
+        backendDOMNodeId: 21,
+      }),
       axNode({id: "one", parentId: "people", role: "listitem", name: "Synthetic attendee one"}),
-      axNode({id: "two", parentId: "people", role: "link", name: "Synthetic attendee two"}),
+      axNode({
+        id: "two", parentId: "people", role: "link", name: "Synthetic attendee two",
+        description: "Synthetic profile link",
+        url: "https://x.com/SYNTHETIC_ATTENDEE",
+      }),
+      ...(this.scrolls < 1 ? [] : [axNode({
+        id: "three", parentId: "people", role: "link", name: "Synthetic attendee three",
+        url: "https://x.com/SYNTHETIC_ATTENDEE_THREE",
+      })]),
       axNode({id: "meta", parentId: "root", role: "heading", name: "Synthetic space metadata"}),
     ];
   }
@@ -134,6 +150,7 @@ class FakeChrome {
     }
     if (method === "Input.dispatchMouseEvent") {
       if (parameters.type === "mouseReleased") this.clicks += 1;
+      if (parameters.type === "mouseWheel") this.scrolls += 1;
       return {};
     }
     if (method === "Input.dispatchKeyEvent") return {};
@@ -216,6 +233,89 @@ async function screenshotProgram() {
   return validateProgram(program);
 }
 
+async function scrollAndLinkProgram() {
+  const program = {
+    protocol: "llm-wiki-browser-executor/v1",
+    program_id: "synthetic-scroll-link-v1",
+    program_sha256: "0".repeat(64),
+    plan_sha256: "d".repeat(64),
+    driver: {id: "synthetic-driver", version: "0.0.1"},
+    capability: "read",
+    target: {
+      url: "https://x.com/i/spaces/SYNTHETIC_SPACE",
+      origin: "https://x.com",
+      path_prefixes: ["/i/spaces/SYNTHETIC_SPACE"],
+    },
+    limits: {timeout_ms: 5000, max_actions: 10, max_repeat: 2},
+    private_slots: [],
+    actions: [
+      {op: "open_or_focus_exact_url"},
+      {op: "attach_debugger"},
+      {op: "scroll_viewport", direction: "down", distance_px: 640},
+      {
+        op: "extract_ax",
+        locator: {role: "link", name: "Synthetic attendee two", unique: true},
+        fields: ["name", "description", "url"],
+        private_result: "page.link",
+        max_items: 1,
+      },
+      {op: "detach_debugger"},
+    ],
+    result: {
+      public_fields: ["status", "action_count", "private_result_count"],
+      private_fields: ["page.link"],
+    },
+  };
+  program.program_sha256 = await canonicalProgramHash(program);
+  return validateProgram(program);
+}
+
+async function scrollingCollectionProgram() {
+  const program = {
+    protocol: "llm-wiki-browser-executor/v1",
+    program_id: "synthetic-scrolling-collection-v1",
+    program_sha256: "0".repeat(64),
+    plan_sha256: "f".repeat(64),
+    driver: {id: "synthetic-driver", version: "0.0.1"},
+    capability: "read",
+    target: {
+      url: "https://x.com/i/spaces/SYNTHETIC_SPACE",
+      origin: "https://x.com",
+      path_prefixes: ["/i/spaces/SYNTHETIC_SPACE"],
+    },
+    limits: {timeout_ms: 5000, max_actions: 8, max_repeat: 2},
+    private_slots: [],
+    actions: [
+      {op: "open_or_focus_exact_url"},
+      {op: "attach_debugger"},
+      {
+        op: "collect_ax_by_scrolling",
+        locator: {
+          roles: ["listitem", "link"],
+          within: {role: "dialog", name: "People listeners"},
+        },
+        fields: ["name", "url"],
+        private_result: "page.people",
+        max_items: 3,
+        direction: "down",
+        distance_px: 640,
+        max_scrolls: 2,
+        settle_ms: 50,
+        dedupe_fields: ["name"],
+        stable_rounds: 1,
+        scroll_anchor: {role: "dialog", name: "People listeners", unique: true},
+      },
+      {op: "detach_debugger"},
+    ],
+    result: {
+      public_fields: ["status", "action_count", "private_result_count"],
+      private_fields: ["page.people"],
+    },
+  };
+  program.program_sha256 = await canonicalProgramHash(program);
+  return validateProgram(program);
+}
+
 async function testReadExecutionAndPrivateExtraction() {
   const program = await validateProgram(loadFixture("x-space-read-v1.json"));
   const fake = new FakeChrome(program.target.url, "read");
@@ -256,6 +356,41 @@ async function testPrivateViewportCapture() {
     mime_type: "image/jpeg",
     data_base64: btoa("synthetic-jpeg-bytes"),
   });
+  assert.equal(fake.attached, false);
+}
+
+async function testViewportScrollAndPrivateLinkMetadata() {
+  const program = await scrollAndLinkProgram();
+  const fake = new FakeChrome(program.target.url, "read");
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  const result = await executor.run(program, {}, async () => false);
+  const wheel = fake.commands.find(({method, parameters}) =>
+    method === "Input.dispatchMouseEvent" && parameters.type === "mouseWheel");
+  assert.equal(wheel.parameters.deltaY, 640);
+  assert.deepEqual(result.private["page.link"], [{
+    name: "Synthetic attendee two",
+    description: "Synthetic profile link",
+    url: "https://x.com/SYNTHETIC_ATTENDEE",
+  }]);
+  assert.equal(JSON.stringify(result.public).includes("SYNTHETIC_ATTENDEE"), false);
+  assert.equal(fake.attached, false);
+}
+
+async function testScrollingCollectionDeduplicatesAndStopsAtBound() {
+  const program = await scrollingCollectionProgram();
+  const fake = new FakeChrome(program.target.url, "read");
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  const result = await executor.run(program, {}, async () => false);
+  assert.equal(fake.scrolls, 1);
+  const wheel = fake.commands.find(({method, parameters}) =>
+    method === "Input.dispatchMouseEvent" && parameters.type === "mouseWheel");
+  assert.deepEqual({x: wheel.parameters.x, y: wheel.parameters.y}, {x: 10, y: 10});
+  assert.deepEqual(result.private["page.people"], [
+    {name: "Synthetic attendee one", url: null},
+    {name: "Synthetic attendee two", url: "https://x.com/SYNTHETIC_ATTENDEE"},
+    {name: "Synthetic attendee three", url: "https://x.com/SYNTHETIC_ATTENDEE_THREE"},
+  ]);
+  assert.equal(result.public.private_result_count, 1);
   assert.equal(fake.attached, false);
 }
 
@@ -309,6 +444,8 @@ async function testCancellationFailsClosed() {
 await testReadExecutionAndPrivateExtraction();
 await testMutationBoundaryAndPrivateInsertion();
 await testPrivateViewportCapture();
+await testViewportScrollAndPrivateLinkMetadata();
+await testScrollingCollectionDeduplicatesAndStopsAtBound();
 await testMutationDenialFailsClosed();
 await testTargetDriftIsNotRetried();
 await testCancellationFailsClosed();

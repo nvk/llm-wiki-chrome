@@ -1,0 +1,66 @@
+import {BrowserExecutor, ExecutionError} from "./executor.mjs";
+import {canonicalProgramHash, validateProgram} from "./protocol.mjs";
+
+const root = document.documentElement;
+
+function failClosed(error) {
+  root.dataset.error = error instanceof ExecutionError ? error.code : "integration-failed";
+  root.dataset.status = "error";
+}
+
+async function run() {
+  const targetUrl = new URLSearchParams(globalThis.location.search).get("target");
+  if (!targetUrl) throw new Error("missing-target");
+  const target = new URL(targetUrl);
+  const platform = await chrome.runtime.getPlatformInfo();
+  const program = {
+    protocol: "llm-wiki-browser-executor/v1",
+    program_id: "synthetic-chrome-read-v1",
+    program_sha256: "0".repeat(64),
+    plan_sha256: "e".repeat(64),
+    driver: {id: "synthetic-driver", version: "0.0.1"},
+    capability: "read",
+    target: {
+      url: targetUrl,
+      origin: target.origin,
+      path_prefixes: [target.pathname],
+    },
+    limits: {timeout_ms: 30000, max_actions: 8, max_repeat: 3},
+    private_slots: [],
+    actions: [
+      {op: "open_or_focus_exact_url"},
+      {op: "attach_debugger"},
+      {op: "scroll_viewport", direction: "down", distance_px: 200},
+      {
+        op: "capture_viewport_private",
+        private_result: "page.viewport",
+        quality: 40,
+        max_bytes: 262144,
+      },
+      {op: "detach_debugger"},
+    ],
+    result: {
+      public_fields: ["status", "action_count", "private_result_count"],
+      private_fields: ["page.viewport"],
+    },
+  };
+  program.program_sha256 = await canonicalProgramHash(program);
+  await validateProgram(program);
+
+  const executor = new BrowserExecutor({chromeApi: chrome, platform: platform.os});
+  const result = await executor.run(program, {}, async () => false);
+  const capture = result.private["page.viewport"];
+  if (capture?.mime_type !== "image/jpeg" || typeof capture.data_base64 !== "string") {
+    throw new Error("missing-private-capture");
+  }
+  const bytes = atob(capture.data_base64).length;
+  if (bytes < 1 || bytes > 262144) throw new Error("invalid-private-capture");
+
+  // Only content-free counters cross the harness boundary. Discard the capture.
+  result.private = {};
+  root.dataset.actionCount = String(result.public.action_count);
+  root.dataset.privateResultCount = String(result.public.private_result_count);
+  root.dataset.status = "pass";
+}
+
+run().catch(failClosed);

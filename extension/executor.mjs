@@ -33,7 +33,7 @@ function sleep(milliseconds) {
 }
 
 function axValue(node, key) {
-  if (key === "name" || key === "role" || key === "value") return node[key]?.value;
+  if (["name", "role", "value", "description"].includes(key)) return node[key]?.value;
   return node.properties?.find((property) => property.name === key)?.value?.value;
 }
 
@@ -153,7 +153,9 @@ export class BrowserExecutor {
       assert_ax_private_value: () => this.assertFocusedPrivateValue(action.slot),
       extract_ax: () => this.extractAX(action),
       extract_ax_collection: () => this.extractAX(action),
+      collect_ax_by_scrolling: () => this.collectAXByScrolling(action),
       capture_viewport_private: () => this.captureViewport(action),
+      scroll_viewport: () => this.scrollViewport(action),
       before_mutation: () => this.beforeMutation(),
     };
     const handler = handlers[action.op];
@@ -473,6 +475,39 @@ export class BrowserExecutor {
     this.assertPrivateResultsBounded(action.private_result);
   }
 
+  async collectAXByScrolling(action) {
+    const rows = [];
+    const seen = new Set();
+    let stable = 0;
+    let encodedBytes = 2;
+    for (let round = 0; round <= action.max_scrolls; round += 1) {
+      this.checkDeadline();
+      const matches = await this.findAX(action.locator, false);
+      let added = 0;
+      for (const node of matches) {
+        const row = this.extractNode(node, action.fields);
+        const identity = JSON.stringify(action.dedupe_fields.map((field) => row[field]));
+        if (seen.has(identity)) continue;
+        seen.add(identity);
+        const rowBytes = new TextEncoder().encode(JSON.stringify(row)).length + 1;
+        if (encodedBytes + rowBytes > MAX_PRIVATE_RESULTS_BYTES) fail("private-result-too-large");
+        encodedBytes += rowBytes;
+        rows.push(row);
+        added += 1;
+        if (rows.length >= action.max_items) break;
+      }
+      if (rows.length >= action.max_items) break;
+      stable = added === 0 ? stable + 1 : 0;
+      if (round >= action.max_scrolls || stable >= action.stable_rounds) break;
+      const [anchor] = await this.findAX(action.scroll_anchor, true);
+      await this.scrollViewport(action, await this.backendBox(anchor.backendDOMNodeId));
+      await sleep(action.settle_ms);
+      await this.assertExactTarget();
+    }
+    this.privateResults[action.private_result] = rows;
+    this.assertPrivateResultsBounded(action.private_result);
+  }
+
   assertPrivateResultsBounded(field) {
     if (new TextEncoder().encode(JSON.stringify(this.privateResults)).length > MAX_PRIVATE_RESULTS_BYTES) {
       delete this.privateResults[field];
@@ -507,6 +542,17 @@ export class BrowserExecutor {
       data_base64: result.data,
     };
     this.assertPrivateResultsBounded(action.private_result);
+  }
+
+  async scrollViewport(action, point = {x: 1, y: 1}) {
+    const deltaY = action.direction === "down" ? action.distance_px : -action.distance_px;
+    await this.command("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      x: point.x,
+      y: point.y,
+      deltaX: 0,
+      deltaY,
+    });
   }
 
   async beforeMutation() {

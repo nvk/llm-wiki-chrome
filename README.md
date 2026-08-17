@@ -16,6 +16,7 @@ The current development branch extends the `0.0.1` foundation with the first
 bounded execution slice:
 
 - strict program hashing and validation;
+- cross-language policy-decision tests for the Python client and MV3 validator;
 - exact HTTPS target and bounded action declarations;
 - separate read and mutation capabilities;
 - one governed mutation callback in the Python client;
@@ -24,12 +25,15 @@ bounded execution slice:
 - exact-tab activation and reviewed same-origin navigation;
 - allowlisted DOM and accessibility-tree reads, waits, and private extraction;
 - byte-capped private viewport JPEG capture with no executor-side persistence;
+- bounded viewport scrolling, deduplicating long-list collection, and private
+  AX link/description extraction;
 - typed click, focus, key-chord, and private text-insertion actions;
 - cancellation, target-focus drift detection, result-size limits, and
   best-effort debugger cleanup;
 - one-shot pre-mutation authorization before a provider effect; and
 - a route-free llm-wiki self-test manifest; and
-- a content-free extension status panel.
+- a content-free extension status panel with connected, running, authorization,
+  and failure states.
 
 This branch is not a release or an installed provider replacement. Targeted
 adapter shadow runs, provider-owned verification, upgrade/rollback testing, and
@@ -76,6 +80,23 @@ node --check extension/protocol.mjs
 node --check extension/executor.mjs
 node --check extension/sidepanel.js
 ```
+
+The deterministic suite is complemented by an isolated real-browser smoke
+test. It requires a matching Chrome for Testing and ChromeDriver pair and an
+exact approved read target supplied at runtime; it does not touch the normal
+Chrome profile or print, persist, or return the captured viewport:
+
+```sh
+LLM_WIKI_BROWSER_E2E_TARGET_URL='<exact approved HTTPS target>' \
+  .venv/bin/python tests/chrome/run_extension_e2e.py \
+    --chrome '/path/to/Google Chrome for Testing' \
+    --chromedriver '/path/to/chromedriver'
+```
+
+The harness copies the unpacked extension into a temporary directory, adds a
+test-only extension page, runs the signed read program in headless Chrome, and
+returns only content-free counters. Chrome binaries are not downloaded or
+installed by the repository.
 
 The self-test is content-free:
 

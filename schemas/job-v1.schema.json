@@ -28,8 +28,11 @@
       "additionalProperties": false,
       "required": ["url", "origin", "path_prefixes"],
       "properties": {
-        "url": {"type": "string", "format": "uri", "pattern": "^https://"},
-        "origin": {"type": "string", "format": "uri", "pattern": "^https://[^/]+$"},
+        "url": {
+          "type": "string", "format": "uri",
+          "pattern": "^https://(?:docs\\.google\\.com|x\\.com)(?:/|$)"
+        },
+        "origin": {"enum": ["https://docs.google.com", "https://x.com"]},
         "path_prefixes": {
           "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true,
           "items": {"type": "string", "pattern": "^/", "maxLength": 2048}
@@ -172,11 +175,39 @@
         "op": {"enum": ["extract_ax", "extract_ax_collection"]},
         "locator": {"$ref": "#/$defs/locator"},
         "fields": {
-          "type": "array", "minItems": 1, "maxItems": 5, "uniqueItems": true,
-          "items": {"enum": ["name", "role", "value", "checked", "focused"]}
+          "type": "array", "minItems": 1, "maxItems": 7, "uniqueItems": true,
+          "items": {"enum": ["name", "role", "value", "description", "url", "checked", "focused"]}
         },
         "private_result": {"$ref": "#/$defs/privateField"},
         "max_items": {"type": "integer", "minimum": 1, "maximum": 5000}
+      }
+    },
+    "scrollCollectionAction": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "op", "locator", "fields", "private_result", "max_items", "direction",
+        "distance_px", "max_scrolls", "settle_ms", "dedupe_fields", "stable_rounds",
+        "scroll_anchor"
+      ],
+      "properties": {
+        "op": {"const": "collect_ax_by_scrolling"},
+        "locator": {"$ref": "#/$defs/locator"},
+        "fields": {
+          "type": "array", "minItems": 1, "maxItems": 7, "uniqueItems": true,
+          "items": {"enum": ["name", "role", "value", "description", "url", "checked", "focused"]}
+        },
+        "private_result": {"$ref": "#/$defs/privateField"},
+        "max_items": {"type": "integer", "minimum": 1, "maximum": 5000},
+        "direction": {"enum": ["up", "down"]},
+        "distance_px": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "max_scrolls": {"type": "integer", "minimum": 1, "maximum": 20},
+        "settle_ms": {"type": "integer", "minimum": 50, "maximum": 3000},
+        "dedupe_fields": {
+          "type": "array", "minItems": 1, "maxItems": 7, "uniqueItems": true,
+          "items": {"enum": ["name", "role", "value", "description", "url", "checked", "focused"]}
+        },
+        "stable_rounds": {"type": "integer", "minimum": 1, "maximum": 3},
+        "scroll_anchor": {"$ref": "#/$defs/locator"}
       }
     },
     "screenshotAction": {
@@ -189,13 +220,24 @@
         "max_bytes": {"type": "integer", "minimum": 16384, "maximum": 262144}
       }
     },
+    "scrollAction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["op", "direction", "distance_px"],
+      "properties": {
+        "op": {"const": "scroll_viewport"},
+        "direction": {"enum": ["up", "down"]},
+        "distance_px": {"type": "integer", "minimum": 1, "maximum": 10000}
+      }
+    },
     "action": {
       "oneOf": [
         {"$ref": "#/$defs/plainAction"}, {"$ref": "#/$defs/navigateAction"},
         {"$ref": "#/$defs/locatedAction"},
         {"$ref": "#/$defs/waitAction"}, {"$ref": "#/$defs/branchAction"},
         {"$ref": "#/$defs/keyAction"}, {"$ref": "#/$defs/privateAction"},
-        {"$ref": "#/$defs/extractAction"}, {"$ref": "#/$defs/screenshotAction"}
+        {"$ref": "#/$defs/extractAction"}, {"$ref": "#/$defs/scrollCollectionAction"},
+        {"$ref": "#/$defs/screenshotAction"},
+        {"$ref": "#/$defs/scrollAction"}
       ]
     }
   }

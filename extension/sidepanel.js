@@ -5,6 +5,8 @@ const indicator = document.getElementById("indicator");
 const labels = {
   connected: "Local connector is ready",
   connecting: "Connecting to local executor…",
+  busy: "Bounded browser job is running",
+  authorizing: "Mutation boundary is being authorized",
   offline: "Local connector is offline",
   error: "Local connector needs attention",
 };

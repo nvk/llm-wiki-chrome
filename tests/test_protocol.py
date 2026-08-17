@@ -66,6 +66,11 @@ class ProtocolTests(unittest.TestCase):
         wrong_origin = copy.deepcopy(base)
         wrong_origin["target"]["origin"] = "https://example.invalid"
         variants.append(wrong_origin)
+        unreviewed_origin = copy.deepcopy(base)
+        unreviewed_origin["target"]["url"] = "https://example.invalid/synthetic"
+        unreviewed_origin["target"]["origin"] = "https://example.invalid"
+        unreviewed_origin["target"]["path_prefixes"] = ["/synthetic"]
+        variants.append(unreviewed_origin)
         wrong_path = copy.deepcopy(base)
         wrong_path["target"]["path_prefixes"] = ["/unrelated/"]
         variants.append(wrong_path)
@@ -190,6 +195,68 @@ class ProtocolTests(unittest.TestCase):
         resign(program)
         with self.assertRaisesRegex(ProtocolError, "exactly match"):
             validate_program(program)
+
+    def test_viewport_scroll_and_private_link_fields_are_bounded(self) -> None:
+        program = load_fixture("x-space-read-v1.json")
+        program["actions"].insert(2, {
+            "op": "scroll_viewport",
+            "direction": "down",
+            "distance_px": 640,
+        })
+        extraction = next(action for action in program["actions"] if action["op"] == "extract_ax")
+        extraction["fields"] = ["name", "description", "url"]
+        resign(program)
+        self.assertEqual(validate_program(program), program)
+
+        for action in (
+            {"op": "scroll_viewport", "direction": "sideways", "distance_px": 640},
+            {"op": "scroll_viewport", "direction": "down", "distance_px": 10001},
+            {"op": "scroll_viewport", "direction": "down", "distance_px": True},
+        ):
+            invalid = load_fixture("x-space-read-v1.json")
+            invalid["actions"].insert(2, action)
+            resign(invalid)
+            with self.subTest(action=action), self.assertRaises(ProtocolError):
+                validate_program(invalid)
+
+    def test_scrolling_collection_bounds_and_dedupe_are_validated(self) -> None:
+        program = load_fixture("x-space-read-v1.json")
+        extraction = next(
+            action for action in program["actions"] if action["op"] == "extract_ax_collection"
+        )
+        extraction.update({
+            "op": "collect_ax_by_scrolling",
+            "direction": "down",
+            "distance_px": 640,
+            "max_scrolls": 6,
+            "settle_ms": 250,
+            "dedupe_fields": ["name"],
+            "stable_rounds": 2,
+            "scroll_anchor": {
+                "roles": ["dialog", "list"],
+                "name_contains_any": ["people", "listeners", "participants"],
+                "unique": True,
+            },
+        })
+        resign(program)
+        self.assertEqual(validate_program(program), program)
+
+        changes = (
+            {"max_scrolls": 7},
+            {"stable_rounds": 3, "max_scrolls": 2},
+            {"dedupe_fields": ["url"]},
+            {"settle_ms": True},
+            {"scroll_anchor": {"selector": "#synthetic"}},
+        )
+        for change in changes:
+            invalid = copy.deepcopy(program)
+            action = next(
+                item for item in invalid["actions"] if item["op"] == "collect_ax_by_scrolling"
+            )
+            action.update(change)
+            resign(invalid)
+            with self.subTest(change=change), self.assertRaises(ProtocolError):
+                validate_program(invalid)
 
     def test_nested_branches_are_bounded(self) -> None:
         program = load_fixture("x-space-read-v1.json")

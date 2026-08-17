@@ -8,6 +8,7 @@ from typing import Any, Iterator
 from urllib.parse import urlsplit
 
 BROWSER_PROTOCOL = "llm-wiki-browser-executor/v1"
+APPROVED_ORIGINS = {"https://docs.google.com", "https://x.com"}
 IDENTIFIER = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
 PROGRAM_IDENTIFIER = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$")
@@ -47,7 +48,9 @@ ALLOWED_OPERATIONS = {
     "assert_ax_private_value",
     "extract_ax",
     "extract_ax_collection",
+    "collect_ax_by_scrolling",
     "capture_viewport_private",
+    "scroll_viewport",
     "before_mutation",
 }
 FORBIDDEN_KEYS = {
@@ -101,7 +104,13 @@ ACTION_KEYS = {
     "assert_ax_private_value": {"op", "slot"},
     "extract_ax": {"op", "locator", "fields", "private_result", "max_items"},
     "extract_ax_collection": {"op", "locator", "fields", "private_result", "max_items"},
+    "collect_ax_by_scrolling": {
+        "op", "locator", "fields", "private_result", "max_items", "direction",
+        "distance_px", "max_scrolls", "settle_ms", "dedupe_fields", "stable_rounds",
+        "scroll_anchor",
+    },
     "capture_viewport_private": {"op", "private_result", "quality", "max_bytes"},
+    "scroll_viewport": {"op", "direction", "distance_px"},
     "first_success": {"op", "branches"},
 }
 LOCATOR_OPERATIONS = {
@@ -113,6 +122,7 @@ LOCATOR_OPERATIONS = {
     "focus_ax",
     "extract_ax",
     "extract_ax_collection",
+    "collect_ax_by_scrolling",
 }
 DOM_LOCATOR_OPERATIONS = {"wait_dom", "click_dom"}
 AX_IDENTITY_KEYS = {
@@ -125,7 +135,7 @@ AX_IDENTITY_KEYS = {
     "within",
     "within_name_contains_any",
 }
-EXTRACTION_FIELDS = {"name", "role", "value", "checked", "focused"}
+EXTRACTION_FIELDS = {"name", "role", "value", "description", "url", "checked", "focused"}
 KEY_NAMES = {
     "platform-primary",
     "control",
@@ -235,7 +245,13 @@ def _validate_target(target: Any) -> None:
     ):
         raise ProtocolError("target must use an exact HTTPS URL and origin")
     expected_origin = f"{url.scheme}://{url.netloc}"
-    if raw_origin != expected_origin or origin.path or origin.query or origin.fragment:
+    if (
+        raw_origin != expected_origin
+        or raw_origin not in APPROVED_ORIGINS
+        or origin.path
+        or origin.query
+        or origin.fragment
+    ):
         raise ProtocolError("target origin does not exactly match the target URL")
     prefixes = target.get("path_prefixes")
     if not isinstance(prefixes, list) or not prefixes:
@@ -394,7 +410,7 @@ def _validate_action(
             raise ProtocolError("action references an undeclared private slot")
         if operation == "insert_private_text" and not isinstance(action.get("replace_all"), bool):
             raise ProtocolError("insert_private_text requires replace_all")
-    if operation in {"extract_ax", "extract_ax_collection"}:
+    if operation in {"extract_ax", "extract_ax_collection", "collect_ax_by_scrolling"}:
         fields = action.get("fields")
         if (
             not isinstance(fields, list)
@@ -409,9 +425,12 @@ def _validate_action(
         if private_result not in private_results:
             raise ProtocolError("extraction references an undeclared private result")
         max_items = action.get("max_items")
-        maximum = 5000 if operation == "extract_ax_collection" else 100
+        maximum = 100 if operation == "extract_ax" else 5000
         if type(max_items) is not int or not 1 <= max_items <= maximum:
             raise ProtocolError("extraction max_items is out of bounds")
+    if operation == "collect_ax_by_scrolling":
+        _validate_locator(action.get("scroll_anchor"), f"action[{index}].scroll_anchor")
+        _validate_ax_locator_shape(action["scroll_anchor"])
     if operation == "capture_viewport_private":
         if action.get("private_result") not in private_results:
             raise ProtocolError("screenshot references an undeclared private result")
@@ -419,6 +438,34 @@ def _validate_action(
             raise ProtocolError("screenshot quality is out of bounds")
         if type(action.get("max_bytes")) is not int or not 16384 <= action["max_bytes"] <= 262144:
             raise ProtocolError("screenshot max_bytes is out of bounds")
+    if operation in {"scroll_viewport", "collect_ax_by_scrolling"}:
+        if action.get("direction") not in {"up", "down"}:
+            raise ProtocolError("scroll direction must be up or down")
+        if type(action.get("distance_px")) is not int or not 1 <= action["distance_px"] <= 10000:
+            raise ProtocolError("scroll distance_px is out of bounds")
+    if operation == "collect_ax_by_scrolling":
+        max_scrolls = action.get("max_scrolls")
+        settle_ms = action.get("settle_ms")
+        stable_rounds = action.get("stable_rounds")
+        dedupe_fields = action.get("dedupe_fields")
+        fields = action["fields"]
+        if type(max_scrolls) is not int or not 1 <= max_scrolls <= 20:
+            raise ProtocolError("scrolling collection max_scrolls is out of bounds")
+        if type(settle_ms) is not int or not 50 <= settle_ms <= 3000:
+            raise ProtocolError("scrolling collection settle_ms is out of bounds")
+        if (
+            type(stable_rounds) is not int
+            or not 1 <= stable_rounds <= 3
+            or stable_rounds > max_scrolls
+        ):
+            raise ProtocolError("scrolling collection stable_rounds is out of bounds")
+        if (
+            not isinstance(dedupe_fields, list)
+            or not 1 <= len(dedupe_fields) <= len(fields)
+            or len(dedupe_fields) != len(set(dedupe_fields))
+            or not set(dedupe_fields).issubset(fields)
+        ):
+            raise ProtocolError("scrolling collection dedupe_fields are invalid")
 
 
 def validate_program(program: Any) -> dict[str, Any]:
@@ -488,6 +535,8 @@ def validate_program(program: Any) -> dict[str, Any]:
     private_result_set = set(private)
     for index, action in enumerate(flat):
         _validate_action(action, slot_set, private_result_set, program["target"], index)
+        if action["op"] == "collect_ax_by_scrolling" and action["max_scrolls"] > limits["max_repeat"]:
+            raise ProtocolError("scrolling collection exceeds max_repeat")
     operations = [action["op"] for action in flat]
     top_level_operations = [action.get("op") for action in raw_actions]
     if (
@@ -516,7 +565,10 @@ def validate_program(program: Any) -> dict[str, Any]:
     extracted = {
         action["private_result"]
         for action in flat
-        if action["op"] in {"extract_ax", "extract_ax_collection", "capture_viewport_private"}
+        if action["op"] in {
+            "extract_ax", "extract_ax_collection", "collect_ax_by_scrolling",
+            "capture_viewport_private",
+        }
     }
     if extracted != private_result_set:
         raise ProtocolError("private result declarations must exactly match extraction actions")

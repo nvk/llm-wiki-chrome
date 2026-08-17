@@ -58,6 +58,11 @@ h1 {
   background: #38a169;
 }
 
+.indicator.busy,
+.indicator.authorizing {
+  background: #b7791f;
+}
+
 .indicator.offline,
 .indicator.error {
   background: #c0564a;

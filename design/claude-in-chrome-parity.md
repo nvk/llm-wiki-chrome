@@ -25,13 +25,14 @@ browser planner into this repository.
 
 | Claude-in-Chrome capability | Executor target | Status / gate |
 |---|---|---|
-| Read page structure and text | Bounded DOM and accessibility queries with private extraction | Implemented in source; provider parity pending |
+| Read page structure, text, and link metadata | Bounded DOM and accessibility queries with private extraction | Implemented in source; provider parity pending |
 | Click and focus controls | Typed DOM/AX actions on the exact tab | Implemented in source; provider parity pending |
 | Type and fill forms | Private slots, focused insertion, exact-value assertions | Implemented in source; provider parity pending |
 | Navigate websites | Exact URL plus reviewed same-origin paths | Implemented in source; provider parity pending |
 | Terminal/Desktop bridge | Stable Native Messaging host and private Unix socket | Foundation complete |
 | Side-panel status | Content-free connector/job state only | Foundation complete |
 | Screenshots / visual context | Bounded private viewport JPEG, no automatic model upload | Implemented in source; consumer parity pending |
+| Scroll long pages and virtualized lists | Bounded typed scroll plus deduplicating AX collection on the exact tab | Implemented in source; X provider adoption pending |
 | Multiple tabs | Explicit job-owned tabs/group only, never ambient tabs | Later typed protocol version |
 | Console logs and network debugging | Bounded private diagnostics with domain/method allowlists | Later read-only debug capability |
 | Downloads and uploads | Registered file roots, typed operations, provider verification | Later explicit effect capability |
@@ -53,15 +54,20 @@ mutation challenge. It retains the existing two reviewed production origins.
 Deterministic tests cover signed-program validation, exact-origin tab queries,
 DOM fallback, private AX extraction, private insertion, one mutation challenge,
 denial, cancellation, target drift, service-worker result filtering, and
-content-free invalid-program failure. Live targeted-adapter shadow runs remain
-the next gate; this source state has not been released or installed as an
-upgrade.
+content-free invalid-program failure. A separate Chrome-for-Testing harness is
+ready to load a temporary unpacked copy, open a runtime-supplied exact approved
+target, and prove real `chrome.tabs`, `chrome.debugger`, CDP screenshot,
+cleanup, and private-result handling while returning only counters. The first
+attempt was blocked before Chrome startup by the current local sandbox's macOS
+Mach-service policy, so a successful real-browser result remains pending in an
+allowed local test profile. Live targeted-adapter shadow runs remain the next
+gate; this source state has not been released or installed as an upgrade.
 
-Screenshots, arbitrary sites, tab groups, console/network diagnostics,
-downloads/uploads, recording, schedules, and notifications are separate review
-events rather than prerequisites for this slice. The viewport-only JPEG action
-was added without a new permission: it is exact-target, quality- and byte-capped,
-declared as a private result, and never persisted or uploaded by the executor.
+Arbitrary sites, tab groups, console/network diagnostics, downloads/uploads,
+recording, schedules, and notifications are separate review events rather than
+prerequisites for this slice. The viewport-only JPEG action was added without a
+new permission: it is exact-target, quality- and byte-capped, declared as a
+private result, and never persisted or uploaded by the executor.
 
 ## Deferred Homebrew packaging
 

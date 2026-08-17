@@ -6,7 +6,8 @@ const ALLOWED_OPERATIONS = new Set([
   "attach_debugger", "detach_debugger", "wait_ax", "wait_dom", "assert_ax",
   "first_success", "click_ax", "click_dom", "focus_ax", "dispatch_key_chord",
   "insert_private_text", "assert_ax_private_value", "extract_ax",
-  "extract_ax_collection", "capture_viewport_private", "before_mutation",
+  "extract_ax_collection", "collect_ax_by_scrolling", "capture_viewport_private",
+  "scroll_viewport", "before_mutation",
 ]);
 const FORBIDDEN_KEYS = new Set([
   "javascript", "script", "expression", "runtime_evaluate", "cdp_method",
@@ -22,7 +23,7 @@ const PUBLIC_RESULT_FIELDS = new Set([
 const MUTATION_ONLY = new Set(["insert_private_text", "before_mutation"]);
 const LOCATOR_OPERATIONS = new Set([
   "wait_ax", "wait_dom", "assert_ax", "click_ax", "click_dom", "focus_ax",
-  "extract_ax", "extract_ax_collection",
+  "extract_ax", "extract_ax_collection", "collect_ax_by_scrolling",
 ]);
 const DOM_LOCATOR_OPERATIONS = new Set(["wait_dom", "click_dom"]);
 const AX_IDENTITY_KEYS = new Set([
@@ -52,10 +53,19 @@ const ACTION_KEYS = new Map([
   ["assert_ax_private_value", new Set(["op", "slot"])],
   ["extract_ax", new Set(["op", "locator", "fields", "private_result", "max_items"])],
   ["extract_ax_collection", new Set(["op", "locator", "fields", "private_result", "max_items"])],
+  ["collect_ax_by_scrolling", new Set([
+    "op", "locator", "fields", "private_result", "max_items", "direction",
+    "distance_px", "max_scrolls", "settle_ms", "dedupe_fields", "stable_rounds",
+    "scroll_anchor",
+  ])],
   ["capture_viewport_private", new Set(["op", "private_result", "quality", "max_bytes"])],
+  ["scroll_viewport", new Set(["op", "direction", "distance_px"])],
   ["first_success", new Set(["op", "branches"])],
 ]);
-const EXTRACTION_FIELDS = new Set(["name", "role", "value", "checked", "focused"]);
+const EXTRACTION_FIELDS = new Set([
+  "name", "role", "value", "description", "url", "checked", "focused",
+]);
+const SCROLL_DIRECTIONS = new Set(["up", "down"]);
 const KEY_NAMES = new Set([
   "platform-primary", "control", "meta", "alt", "shift", "enter", "escape",
   "tab", "arrow-up", "arrow-down", "arrow-left", "arrow-right", "backspace",
@@ -244,8 +254,8 @@ function validateAction(action, program, index) {
   if (action.op === "insert_private_text" && typeof action.replace_all !== "boolean") {
     throw new Error("A private insertion mode is invalid.");
   }
-  if (["extract_ax", "extract_ax_collection"].includes(action.op)) {
-    const maximum = action.op === "extract_ax_collection" ? 5000 : 100;
+  if (["extract_ax", "extract_ax_collection", "collect_ax_by_scrolling"].includes(action.op)) {
+    const maximum = action.op === "extract_ax" ? 100 : 5000;
     if (!Array.isArray(action.fields) || action.fields.length < 1 ||
         new Set(action.fields).size !== action.fields.length ||
         action.fields.some((field) => !EXTRACTION_FIELDS.has(field)) ||
@@ -254,11 +264,32 @@ function validateAction(action, program, index) {
       throw new Error("A private extraction is invalid.");
     }
   }
+  if (action.op === "collect_ax_by_scrolling") {
+    validateLocator(action.scroll_anchor, `Action ${index} scroll anchor`);
+    validateAXLocatorShape(action.scroll_anchor);
+  }
   if (action.op === "capture_viewport_private" &&
       (!program.result.private_fields.includes(action.private_result) ||
        !Number.isInteger(action.quality) || action.quality < 10 || action.quality > 90 ||
        !Number.isInteger(action.max_bytes) || action.max_bytes < 16384 || action.max_bytes > 262144)) {
     throw new Error("A private screenshot declaration is invalid.");
+  }
+  if (["scroll_viewport", "collect_ax_by_scrolling"].includes(action.op) &&
+      (!SCROLL_DIRECTIONS.has(action.direction) ||
+       !Number.isInteger(action.distance_px) || action.distance_px < 1 || action.distance_px > 10000)) {
+    throw new Error("A viewport scroll declaration is invalid.");
+  }
+  if (action.op === "collect_ax_by_scrolling" &&
+      (!Number.isInteger(action.max_scrolls) || action.max_scrolls < 1 ||
+       action.max_scrolls > program.limits.max_repeat ||
+       !Number.isInteger(action.settle_ms) || action.settle_ms < 50 || action.settle_ms > 3000 ||
+       !Number.isInteger(action.stable_rounds) || action.stable_rounds < 1 ||
+       action.stable_rounds > 3 || action.stable_rounds > action.max_scrolls ||
+       !Array.isArray(action.dedupe_fields) || action.dedupe_fields.length < 1 ||
+       action.dedupe_fields.length > action.fields.length ||
+       new Set(action.dedupe_fields).size !== action.dedupe_fields.length ||
+       action.dedupe_fields.some((field) => !action.fields.includes(field)))) {
+    throw new Error("A scrolling collection declaration is invalid.");
   }
 }
 
@@ -356,7 +387,9 @@ export async function validateProgram(program) {
     throw new Error("Mutation recovery branches must precede the mutation boundary.");
   }
   const extracted = new Set(
-    flat.filter((action) => ["extract_ax", "extract_ax_collection", "capture_viewport_private"].includes(action.op))
+    flat.filter((action) => [
+      "extract_ax", "extract_ax_collection", "collect_ax_by_scrolling", "capture_viewport_private",
+    ].includes(action.op))
       .map((action) => action.private_result),
   );
   if (extracted.size !== program.result.private_fields.length ||

@@ -25,7 +25,8 @@ async function setConnectorState(state, detail = "") {
   await chrome.storage.session.set({
     [CONNECTOR_STATE_KEY]: {state, detail: String(detail || "").slice(0, 240)},
   });
-  await chrome.action.setBadgeText({text: state === "connected" ? "" : "!"});
+  const healthy = new Set(["connected", "busy", "authorizing"]).has(state);
+  await chrome.action.setBadgeText({text: healthy ? "" : "!"});
   await chrome.action.setBadgeBackgroundColor({color: "#C53030"});
 }
 
@@ -105,6 +106,8 @@ function publicSnapshot(program, executor, status) {
 
 function requestMutation(job) {
   if (job.cancelled || job.boundary) return Promise.resolve(false);
+  setConnectorState("authorizing", "The targeted adapter is authorizing one mutation boundary.")
+    .catch(() => {});
   const remaining = Math.max(1, job.executor.deadline - Date.now());
   return new Promise((resolve) => {
     const boundary = {resolve, settled: false, timer: null};
@@ -126,6 +129,7 @@ function handleMutationAuthorization(message, port) {
     cancelActiveJob(port);
     return;
   }
+  setConnectorState("busy", "A bounded browser job is running.").catch(() => {});
   finishBoundary(job, message.authorized);
 }
 
@@ -178,6 +182,7 @@ async function executeJob(message, port) {
   });
   job.executor = executor;
   activeJob = job;
+  await setConnectorState("busy", "A bounded browser job is running.").catch(() => {});
 
   try {
     const result = await executor.run(
@@ -209,6 +214,9 @@ async function executeJob(message, port) {
   } finally {
     finishBoundary(job, false);
     if (activeJob === job) activeJob = null;
+    if (nativePort === port) {
+      await setConnectorState("connected", "Ready for an exact-target job.").catch(() => {});
+    }
   }
 }
 
