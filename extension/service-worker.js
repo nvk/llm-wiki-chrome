@@ -557,7 +557,11 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   checkedWorkspace().catch(() => {});
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Only our own extension pages may drive workspace and job controls; no
+  // externally_connectable is declared, so web pages cannot reach this, but
+  // other installed extensions could otherwise send these runtime messages.
+  if (sender && sender.id && sender.id !== chrome.runtime.id) return false;
   if (message?.type === "connect-active-tab") {
     chrome.tabs.query({active: true, lastFocusedWindow: true}).then(async (tabs) => {
       if (tabs.length !== 1) return {connected: false, reason: "missing-tab"};

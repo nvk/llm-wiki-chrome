@@ -100,7 +100,10 @@ TOOLS = [
     },
     {
         "name": "browser_key",
-        "description": "Dispatch one bounded key chord to an explicitly shared tab.",
+        "description": (
+            "Dispatch one bounded key chord to an explicitly shared tab. Modifier and Enter/Tab chords "
+            "can commit or submit a focused form; this crosses the governed mutation boundary."
+        ),
         "inputSchema": _object_schema({
             "collaboration_id": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
             "keys": {

@@ -35,6 +35,8 @@ content, exposes no messaging other than its fixed revoke signal, and is not a
 manifest content script. Marker injection failure does not broaden or preserve
 a grant.
 
+The local connector socket is a private user-owned Unix socket: it accepts connections only from processes running as the same OS user. Any such local process that holds a user-created grant can drive that exact tab, and the direct agent surface self-authorizes its single internal mutation boundary, so a local agent can click, type, and dispatch commit-capable key chords without a per-action user gesture. User visibility (the green outline, ON badge, and side panel job state) is the ambient check on local agent behavior; consequential provider effects must go through a targeted adapter whose before_mutation callback applies real authorization. Treat the local agent and its credentials as part of the trusted computing base.
+
 The direct agent surface requires a collaboration ID obtained from
 `browser_tabs` on every read or interaction. It supports only bounded AX
 snapshots, viewport screenshots, semantic AX clicks, private text insertion,
