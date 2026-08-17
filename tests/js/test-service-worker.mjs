@@ -69,6 +69,8 @@ const tabs = new Map([
   }],
 ]);
 let attached = false;
+let panelBehavior = null;
+let exposeSensitiveTabFields = true;
 
 globalThis.chrome = {
   storage: {
@@ -82,7 +84,11 @@ globalThis.chrome = {
     setBadgeBackgroundColor: async () => {},
     onClicked: new EventHook(),
   },
-  sidePanel: {open: async () => {}},
+  sidePanel: {
+    setPanelBehavior: async (behavior) => {
+      panelBehavior = structuredClone(behavior);
+    },
+  },
   runtime: {
     connectNative: () => nativePort,
     getPlatformInfo: async () => ({os: "mac"}),
@@ -111,7 +117,9 @@ globalThis.chrome = {
     get: async (tabId) => {
       const value = tabs.get(tabId);
       if (!value) throw new Error("synthetic tab is closed");
-      return structuredClone(value);
+      const result = structuredClone(value);
+      if (!exposeSensitiveTabFields) delete result.url;
+      return result;
     },
     query: async (query) => {
       assert.deepEqual(query, {active: true, lastFocusedWindow: true});
@@ -173,6 +181,8 @@ async function runtimeMessage(message) {
 
 await import("../../extension/service-worker.js");
 nativePort.onMessage.emit({protocol: PROTOCOL, type: "ready"});
+await waitFor(() => panelBehavior);
+assert.deepEqual(panelBehavior, {openPanelOnActionClick: true});
 
 assert.equal((await runtimeMessage({type: "connect-active-tab"})).connected, true);
 await waitFor(() => stored.collaborationWorkspace?.collaborations?.length === 1);
@@ -197,6 +207,13 @@ assert.equal(status.collaborations.length, 2);
 assert.equal(status.collaborations.filter((value) => value.selected).length, 1);
 assert.ok(status.collaborations.every((value) => !Object.hasOwn(value, "url")));
 assert.ok(status.collaborations.every((value) => !Object.hasOwn(value, "current")));
+
+exposeSensitiveTabFields = false;
+assert.deepEqual(await runtimeMessage({type: "connect-active-tab"}), {
+  connected: false,
+  reason: "active-tab-grant-required",
+});
+exposeSensitiveTabFields = true;
 
 async function program(capability) {
   const actions = [

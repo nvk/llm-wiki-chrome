@@ -209,15 +209,12 @@ async function revokeCollaboration(collaborationId = null, revokeAll = false) {
 }
 
 async function startCollaboration(tab) {
-  const panel = Number.isInteger(tab?.id) ? chrome.sidePanel.open({tabId: tab.id}) : Promise.resolve();
+  if (!Number.isInteger(tab?.id)) return "missing-tab";
   let exactTab = tab;
-  if (Number.isInteger(tab?.id)) {
-    exactTab = await chrome.tabs.get(tab.id).catch(() => tab);
-  }
+  exactTab = await chrome.tabs.get(tab.id).catch(() => tab);
   const target = targetFromTab(exactTab);
   if (!target) {
-    await panel.catch(() => {});
-    return false;
+    return typeof exactTab?.url === "string" ? "unsupported-tab" : "active-tab-grant-required";
   }
   await withWorkspaceMutation(async () => {
     const workspace = await checkedWorkspaceUnlocked();
@@ -249,8 +246,7 @@ async function startCollaboration(tab) {
       collaborations,
     }, removed.filter(Boolean));
   });
-  await panel.catch(() => {});
-  return true;
+  return "connected";
 }
 
 async function collaborationForProgram(program) {
@@ -524,6 +520,7 @@ async function handleNativeMessage(message, port) {
 }
 
 async function configureExtension() {
+  await chrome.sidePanel.setPanelBehavior({openPanelOnActionClick: true}).catch(() => {});
   connectNativeBridge();
   await setJobState(null).catch(() => {});
   const workspace = await checkedWorkspace();
@@ -536,9 +533,7 @@ chrome.runtime.onStartup.addListener(configureExtension);
 configureExtension().catch(() => {});
 
 chrome.action.onClicked.addListener((tab) => {
-  startCollaboration(tab).catch(() => {
-    setConnectorState("error", "Could not expose the selected HTTPS tab.").catch(() => {});
-  });
+  startCollaboration(tab).catch(() => {});
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -559,14 +554,15 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "connect-active-tab") {
     chrome.tabs.query({active: true, lastFocusedWindow: true}).then(async (tabs) => {
-      if (tabs.length !== 1) return {connected: false};
-      const connected = await startCollaboration(tabs[0]);
-      if (!connected) return {connected: false};
+      if (tabs.length !== 1) return {connected: false, reason: "missing-tab"};
+      const result = await startCollaboration(tabs[0]);
+      if (result !== "connected") return {connected: false, reason: result};
       const workspace = await checkedWorkspace();
       return {
         connected: workspace.collaborations.some((value) => value.tab_id === tabs[0].id),
+        reason: "connected",
       };
-    }).then(sendResponse).catch(() => sendResponse({connected: false}));
+    }).then(sendResponse).catch(() => sendResponse({connected: false, reason: "workspace-error"}));
     return true;
   }
   if (message?.type === "stop-collaboration") {

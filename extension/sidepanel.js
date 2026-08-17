@@ -13,7 +13,7 @@ const jobState = document.getElementById("job-state");
 const jobProgress = document.getElementById("job-progress");
 const jobDetail = document.getElementById("job-detail");
 const cancelJobButton = document.getElementById("cancel-job");
-let connectFailure = false;
+let connectFailure = "";
 
 const labels = {
   connected: "Local connector is ready",
@@ -71,7 +71,11 @@ function renderCollaborations(collaborations, connectorReady) {
   const connected = count > 0 && connectorReady;
   connectTabButton.textContent = connected
     ? "Connected — agent notified"
-    : connectFailure ? "Connection failed — retry" : "Connect active tab";
+    : connectFailure === "active-tab-grant-required"
+      ? "Click the pinned toolbar icon to grant this tab"
+      : connectFailure === "unsupported-tab"
+        ? "Only HTTPS pages can be connected"
+        : connectFailure ? "Connection failed — retry" : "Connect active tab";
   connectTabButton.className = `connect-button ${connected ? "connected" : connectFailure ? "error" : ""}`;
 }
 
@@ -123,16 +127,18 @@ stopAllButton.addEventListener("click", () => {
   });
 });
 
-connectTabButton.addEventListener("click", () => {
+function connectActiveTab() {
   connectTabButton.disabled = true;
   connectTabButton.textContent = "Connecting active tab…";
   send({type: "connect-active-tab"}).then((response) => {
-    connectFailure = response?.connected !== true;
+    connectFailure = response?.connected === true ? "" : String(response?.reason || "workspace-error");
   }).finally(() => {
     connectTabButton.disabled = false;
     refresh();
   });
-});
+}
+
+connectTabButton.addEventListener("click", connectActiveTab);
 
 cancelJobButton.addEventListener("click", () => {
   cancelJobButton.disabled = true;
@@ -140,4 +146,5 @@ cancelJobButton.addEventListener("click", () => {
 });
 
 refresh();
+connectActiveTab();
 setInterval(refresh, 2000);

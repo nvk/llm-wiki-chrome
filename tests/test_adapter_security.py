@@ -107,6 +107,8 @@ validateProgram(program).then(() => {
         self.assertIn("Stop all", html)
         self.assertIn("Cancel job", html)
         self.assertIn("Connect active tab", html)
+        self.assertIn("connectActiveTab();", script)
+        self.assertNotIn("sidePanel.open", script)
 
     def test_direct_agent_interface_exposes_only_fixed_structured_tools(self) -> None:
         source = (ROOT / "browser_executor" / "mcp_server.py").read_text(encoding="utf-8")

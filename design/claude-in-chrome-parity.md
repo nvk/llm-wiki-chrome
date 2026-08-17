@@ -62,8 +62,10 @@ arbitrary program or scripting tool. Per-Chrome-instance private sockets are
 aggregated by exact grant, avoiding last-process-wins behavior when several
 Chrome windows or profiles have the extension loaded. A fixed content-blind
 page marker makes every active grant visually obvious.
-The side panel has an explicit connect button whose connected state confirms
-that the local agent relay has been notified.
+The toolbar action opens the side panel and creates the `activeTab` grant; panel
+load consumes it automatically. The connect button is only a status/retry
+control, and its connected state confirms that the local agent relay has been
+notified.
 
 Deterministic tests cover signed-program validation, exact-origin tab queries,
 DOM fallback, private AX extraction, private insertion, one mutation challenge,
