@@ -55,6 +55,8 @@ ALLOWED_OPERATIONS = {
     "stop_log_capture",
     "start_request_capture",
     "stop_request_capture",
+    "start_console_capture",
+    "stop_console_capture",
     "before_mutation",
 }
 FORBIDDEN_KEYS = {
@@ -99,6 +101,7 @@ ACTION_KEYS = {
     "before_mutation": {"op"},
     "stop_log_capture": {"op"},
     "stop_request_capture": {"op"},
+    "stop_console_capture": {"op"},
     "wait_ax": {"op", "locator", "timeout_ms"},
     "wait_dom": {"op", "locator", "timeout_ms"},
     "assert_ax": {"op", "locator"},
@@ -119,6 +122,9 @@ ACTION_KEYS = {
     "scroll_viewport": {"op", "direction", "distance_px"},
     "start_log_capture": {"op", "private_result", "max_entries", "max_text_bytes"},
     "start_request_capture": {"op", "private_result", "max_entries", "max_url_bytes"},
+    "start_console_capture": {
+        "op", "private_result", "max_entries", "max_arguments", "max_argument_bytes",
+    },
     "first_success": {"op", "branches"},
 }
 LOCATOR_OPERATIONS = {
@@ -494,6 +500,21 @@ def _validate_action(
             or not 256 <= action["max_url_bytes"] <= 16384
         ):
             raise ProtocolError("request capture max_url_bytes is out of bounds")
+    if operation == "start_console_capture":
+        if action.get("private_result") not in private_results:
+            raise ProtocolError("console capture references an undeclared private result")
+        if type(action.get("max_entries")) is not int or not 1 <= action["max_entries"] <= 500:
+            raise ProtocolError("console capture max_entries is out of bounds")
+        if (
+            type(action.get("max_arguments")) is not int
+            or not 1 <= action["max_arguments"] <= 20
+        ):
+            raise ProtocolError("console capture max_arguments is out of bounds")
+        if (
+            type(action.get("max_argument_bytes")) is not int
+            or not 256 <= action["max_argument_bytes"] <= 16384
+        ):
+            raise ProtocolError("console capture max_argument_bytes is out of bounds")
 
 
 def validate_program(program: Any) -> dict[str, Any]:
@@ -616,6 +637,19 @@ def validate_program(program: Any) -> dict[str, Any]:
         )
     ):
         raise ProtocolError("private request capture lifecycle is invalid")
+    console_starts = operations.count("start_console_capture")
+    console_stops = operations.count("stop_console_capture")
+    if (
+        console_starts != console_stops
+        or console_starts > 1
+        or top_level_operations.count("start_console_capture") != console_starts
+        or top_level_operations.count("stop_console_capture") != console_stops
+        or (
+            console_starts == 1
+            and operations.index("start_console_capture") >= operations.index("stop_console_capture")
+        )
+    ):
+        raise ProtocolError("private console capture lifecycle is invalid")
     extracted = {
         action["private_result"]
         for action in flat
@@ -623,6 +657,7 @@ def validate_program(program: Any) -> dict[str, Any]:
             "extract_ax", "extract_ax_collection", "collect_ax_by_scrolling",
             "capture_viewport_private", "start_log_capture",
             "start_request_capture",
+            "start_console_capture",
         }
     }
     if extracted != private_result_set:

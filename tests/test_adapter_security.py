@@ -49,13 +49,20 @@ class AdapterAndSecurityTests(unittest.TestCase):
         self.assertIn("new BrowserExecutor", source)
         self.assertIn('"Network.enable"', source)
         self.assertIn('"Network.disable"', source)
+        self.assertIn('"Runtime.enable"', source)
+        self.assertIn('"Runtime.disable"', source)
+        self.assertIn('"Runtime.consoleAPICalled"', source)
         for diagnostic_method in (
             "Network.getResponseBody",
             "Network.getRequestPostData",
             "Network.setRequestInterception",
             "Network.setExtraHTTPHeaders",
             "Fetch.enable",
-            "Runtime.consoleAPICalled",
+            "Runtime.getProperties",
+            "Runtime.callFunctionOn",
+            "Runtime.compileScript",
+            "Runtime.runScript",
+            "Runtime.awaitPromise",
         ):
             with self.subTest(diagnostic_method=diagnostic_method):
                 self.assertNotIn(diagnostic_method, source)

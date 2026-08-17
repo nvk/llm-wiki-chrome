@@ -8,6 +8,15 @@ const ALLOWED_CDP_METHODS = new Set([
   "Input.dispatchMouseEvent", "Input.insertText", "Page.disable", "Page.enable",
   "Page.captureScreenshot", "Log.disable", "Log.enable",
   "Network.disable", "Network.enable",
+  "Runtime.disable", "Runtime.enable",
+]);
+const CONSOLE_TYPES = new Set([
+  "log", "debug", "info", "error", "warning", "dir", "dirxml", "table", "trace",
+  "clear", "startGroup", "startGroupCollapsed", "endGroup", "assert", "profile",
+  "profileEnd", "count", "timeEnd",
+]);
+const REMOTE_OBJECT_TYPES = new Set([
+  "object", "function", "undefined", "string", "number", "boolean", "symbol", "bigint",
 ]);
 const RETRYABLE_WAIT_CODES = new Set([
   "element-not-found", "element-state-mismatch", "element-ambiguous", "target-not-ready",
@@ -94,6 +103,7 @@ export class BrowserExecutor {
     this.mutationStarted = false;
     this.logCapture = null;
     this.requestCapture = null;
+    this.consoleCapture = null;
     this.deadline = 0;
   }
 
@@ -116,6 +126,7 @@ export class BrowserExecutor {
         private: this.privateResults,
       };
     } finally {
+      if (this.consoleCapture) await this.stopConsoleCapture(true);
       if (this.requestCapture) await this.stopRequestCapture(true);
       if (this.logCapture) await this.stopLogCapture(true);
       if (this.attached) await this.detachDebugger(true);
@@ -165,6 +176,8 @@ export class BrowserExecutor {
       stop_log_capture: () => this.stopLogCapture(false),
       start_request_capture: () => this.startRequestCapture(action),
       stop_request_capture: () => this.stopRequestCapture(false),
+      start_console_capture: () => this.startConsoleCapture(action),
+      stop_console_capture: () => this.stopConsoleCapture(false),
       before_mutation: () => this.beforeMutation(),
     };
     const handler = handlers[action.op];
@@ -808,6 +821,129 @@ export class BrowserExecutor {
       await this.command("Network.disable", {});
     } catch (_error) {
       if (!bestEffort) fail("request-capture-cleanup-failed");
+    }
+    if (bestEffort) return;
+    if (capture.failed) fail(capture.failed);
+    this.privateResults[capture.privateResult] = {
+      entries: capture.entries,
+      truncated: capture.truncated,
+    };
+    this.assertPrivateResultsBounded(capture.privateResult);
+  }
+
+  privateConsoleArgument(argument, maximumBytes) {
+    if (!argument || typeof argument !== "object" || !REMOTE_OBJECT_TYPES.has(argument.type)) {
+      fail("private-console-invalid");
+    }
+    const subtype = argument.subtype === undefined ? null : argument.subtype;
+    if (subtype !== null && (typeof subtype !== "string" ||
+        !/^[a-z][a-z0-9-]{0,63}$/u.test(subtype))) {
+      fail("private-console-invalid");
+    }
+    let value = null;
+    let truncated = false;
+    if (argument.type === "string") {
+      if (typeof argument.value !== "string") fail("private-console-invalid");
+      if (new TextEncoder().encode(argument.value).length > maximumBytes) truncated = true;
+      else value = argument.value;
+    } else if (argument.type === "number") {
+      if (typeof argument.value === "number" && Number.isFinite(argument.value)) {
+        value = argument.value;
+      } else if (typeof argument.unserializableValue === "string" &&
+          new TextEncoder().encode(argument.unserializableValue).length <= maximumBytes) {
+        value = argument.unserializableValue;
+      } else {
+        fail("private-console-invalid");
+      }
+    } else if (argument.type === "boolean") {
+      if (typeof argument.value !== "boolean") fail("private-console-invalid");
+      value = argument.value;
+    } else if (argument.type === "bigint") {
+      if (typeof argument.unserializableValue !== "string") fail("private-console-invalid");
+      if (new TextEncoder().encode(argument.unserializableValue).length > maximumBytes) truncated = true;
+      else value = argument.unserializableValue;
+    }
+    return {value: {type: argument.type, subtype, value}, truncated};
+  }
+
+  handleConsoleEvent(source, method, parameters) {
+    const capture = this.consoleCapture;
+    if (!capture || source?.tabId !== this.tabId || method !== "Runtime.consoleAPICalled") return;
+    if (!parameters || !CONSOLE_TYPES.has(parameters.type) || !Array.isArray(parameters.args) ||
+        typeof parameters.timestamp !== "number" || !Number.isFinite(parameters.timestamp)) {
+      capture.failed = "private-console-invalid";
+      return;
+    }
+    if (capture.entries.length >= capture.maxEntries) {
+      capture.truncated = true;
+      return;
+    }
+    try {
+      let argumentsTruncated = parameters.args.length > capture.maxArguments;
+      const args = parameters.args.slice(0, capture.maxArguments).map((argument) => {
+        const converted = this.privateConsoleArgument(argument, capture.maxArgumentBytes);
+        argumentsTruncated ||= converted.truncated;
+        return converted.value;
+      });
+      const row = {
+        type: parameters.type,
+        timestamp: parameters.timestamp,
+        arguments: args,
+        arguments_truncated: argumentsTruncated,
+      };
+      capture.entries.push(row);
+      const value = {entries: capture.entries, truncated: capture.truncated};
+      if (new TextEncoder().encode(JSON.stringify(value)).length > MAX_PRIVATE_RESULTS_BYTES) {
+        capture.entries.pop();
+        capture.truncated = true;
+      }
+    } catch (_error) {
+      capture.failed = "private-console-invalid";
+    }
+  }
+
+  async startConsoleCapture(action) {
+    if (!this.attached || this.consoleCapture || !this.chrome.debugger?.onEvent?.addListener) {
+      fail("console-capture-state-invalid");
+    }
+    const capture = {
+      privateResult: action.private_result,
+      maxEntries: action.max_entries,
+      maxArguments: action.max_arguments,
+      maxArgumentBytes: action.max_argument_bytes,
+      entries: [],
+      truncated: false,
+      failed: null,
+      listener: null,
+    };
+    capture.listener = (source, method, parameters) => this.handleConsoleEvent(source, method, parameters);
+    this.consoleCapture = capture;
+    this.chrome.debugger.onEvent.addListener(capture.listener);
+    try {
+      await this.command("Runtime.enable", {});
+    } catch (error) {
+      this.chrome.debugger.onEvent.removeListener(capture.listener);
+      this.consoleCapture = null;
+      throw error;
+    }
+  }
+
+  async stopConsoleCapture(bestEffort) {
+    const capture = this.consoleCapture;
+    if (!capture) {
+      if (bestEffort) return;
+      fail("console-capture-state-invalid");
+    }
+    this.consoleCapture = null;
+    try {
+      this.chrome.debugger.onEvent.removeListener(capture.listener);
+    } catch (_error) {
+      if (!bestEffort) fail("console-capture-cleanup-failed");
+    }
+    try {
+      await this.command("Runtime.disable", {});
+    } catch (_error) {
+      if (!bestEffort) fail("console-capture-cleanup-failed");
     }
     if (bestEffort) return;
     if (capture.failed) fail(capture.failed);

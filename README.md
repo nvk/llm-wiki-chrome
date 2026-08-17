@@ -30,6 +30,8 @@ bounded execution slice:
 - bounded exact-tab browser-log capture through private result slots;
 - bounded exact-tab request metadata capture that strips query strings and
   ignores headers, bodies, cookies, initiators, and security details;
+- bounded exact-tab console-API capture that retains only scalar arguments and
+  never evaluates or dereferences remote objects;
 - typed click, focus, key-chord, and private text-insertion actions;
 - cancellation, target-focus drift detection, result-size limits, and
   best-effort debugger cleanup;
@@ -129,7 +131,11 @@ The fixed CDP allowlist also includes paired `Log.enable`/`Log.disable` and
 private request method, origin/path, resource type, status, MIME, cache, and
 failure scalars; it strips query strings and never retains headers, bodies,
 cookies, initiators, security details, or request IDs. Neither capability
-exposes raw diagnostic methods, console-API events, or request interception.
+exposes raw diagnostic methods or request interception. A separate paired
+`Runtime.enable`/`Runtime.disable` window retains only bounded private
+`Runtime.consoleAPICalled` types, timestamps, and scalar arguments. It ignores
+contexts, stacks, descriptions, previews, and object IDs and never allows
+evaluation, compilation, function calls, script execution, or property access.
 The executor is trusted local code, not an operating-system sandbox. Targeted
 adapters remain responsible for authorizing every provider effect and proving
 the provider's final state independently. See [SECURITY.md](SECURITY.md).

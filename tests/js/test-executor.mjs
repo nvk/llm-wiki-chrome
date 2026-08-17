@@ -150,7 +150,7 @@ class FakeChrome {
 
   command(method, parameters) {
     if (["DOM.enable", "DOM.disable", "Accessibility.enable", "Accessibility.disable",
-      "Page.enable", "Page.disable", "Log.disable", "Network.disable",
+      "Page.enable", "Page.disable", "Log.disable", "Network.disable", "Runtime.disable",
       "DOM.scrollIntoViewIfNeeded"].includes(method)) return {};
     if (method === "Log.enable") {
       this.debugger.onEvent.emit(
@@ -160,6 +160,31 @@ class FakeChrome {
           source: "javascript", level: "warning", text: "Synthetic browser diagnostic",
           timestamp: 1234, url: "https://x.com/i/spaces/SYNTHETIC_SPACE", lineNumber: 7,
         }},
+      );
+      return {};
+    }
+    if (method === "Runtime.enable") {
+      this.debugger.onEvent.emit(
+        {tabId: this.tab.id},
+        "Runtime.consoleAPICalled",
+        {
+          type: "error",
+          args: [
+            {type: "string", value: "Synthetic console diagnostic"},
+            {type: "number", value: 7},
+            {
+              type: "object",
+              subtype: "error",
+              description: "not-retained object description",
+              objectId: "not-retained-object-id",
+              preview: {properties: [{name: "secret", value: "not-retained"}]},
+            },
+          ],
+          executionContextId: 99,
+          timestamp: 3000,
+          stackTrace: {callFrames: [{url: "not-retained-stack"}]},
+          context: "not-retained-context",
+        },
       );
       return {};
     }
@@ -472,6 +497,44 @@ async function requestCaptureProgram() {
   return validateProgram(program);
 }
 
+async function consoleCaptureProgram() {
+  const program = {
+    protocol: "llm-wiki-browser-executor/v1",
+    program_id: "synthetic-console-capture-v1",
+    program_sha256: "0".repeat(64),
+    plan_sha256: "3".repeat(64),
+    driver: {id: "synthetic-driver", version: "0.0.1"},
+    capability: "read",
+    target: {
+      url: "https://x.com/i/spaces/SYNTHETIC_SPACE",
+      origin: "https://x.com",
+      path_prefixes: ["/i/spaces/SYNTHETIC_SPACE"],
+    },
+    limits: {timeout_ms: 5000, max_actions: 8, max_repeat: 2},
+    private_slots: [],
+    actions: [
+      {op: "open_or_focus_exact_url"},
+      {op: "attach_debugger"},
+      {
+        op: "start_console_capture",
+        private_result: "page.console",
+        max_entries: 10,
+        max_arguments: 5,
+        max_argument_bytes: 1024,
+      },
+      {op: "assert_exact_target"},
+      {op: "stop_console_capture"},
+      {op: "detach_debugger"},
+    ],
+    result: {
+      public_fields: ["status", "action_count", "private_result_count"],
+      private_fields: ["page.console"],
+    },
+  };
+  program.program_sha256 = await canonicalProgramHash(program);
+  return validateProgram(program);
+}
+
 async function testReadExecutionAndPrivateExtraction() {
   const program = await validateProgram(loadFixture("x-space-read-v1.json"));
   const fake = new FakeChrome(program.target.url, "read");
@@ -634,6 +697,58 @@ async function testInvalidPrivateRequestFailsClosedAndCleansUp() {
   assert.equal(fake.attached, false);
 }
 
+async function testPrivateConsoleCaptureKeepsOnlyBoundedScalarsAndCleansUp() {
+  const program = await consoleCaptureProgram();
+  const fake = new FakeChrome(program.target.url, "read");
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  const result = await executor.run(program, {}, async () => false);
+  assert.deepEqual(result.private["page.console"], {
+    entries: [{
+      type: "error",
+      timestamp: 3000,
+      arguments: [
+        {type: "string", subtype: null, value: "Synthetic console diagnostic"},
+        {type: "number", subtype: null, value: 7},
+        {type: "object", subtype: "error", value: null},
+      ],
+      arguments_truncated: false,
+    }],
+    truncated: false,
+  });
+  for (const excluded of [
+    "not-retained object description", "not-retained-object-id", "not-retained-stack",
+    "not-retained-context", "secret",
+  ]) {
+    assert.equal(JSON.stringify(result.private).includes(excluded), false);
+  }
+  assert.equal(fake.debugger.onEvent.listeners.length, 0);
+  assert.equal(fake.attached, false);
+}
+
+async function testInvalidPrivateConsoleEventFailsClosedAndCleansUp() {
+  const program = await consoleCaptureProgram();
+  const fake = new FakeChrome(program.target.url, "read");
+  const original = fake.command.bind(fake);
+  fake.command = (method, parameters) => {
+    if (method === "Runtime.enable") {
+      fake.debugger.onEvent.emit(
+        {tabId: fake.tab.id},
+        "Runtime.consoleAPICalled",
+        {type: "unsupported", args: [], timestamp: 1},
+      );
+      return {};
+    }
+    return original(method, parameters);
+  };
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  await assert.rejects(
+    executor.run(program, {}, async () => false),
+    (error) => error instanceof ExecutionError && error.code === "private-console-invalid",
+  );
+  assert.equal(fake.debugger.onEvent.listeners.length, 0);
+  assert.equal(fake.attached, false);
+}
+
 async function testMutationDenialFailsClosed() {
   const program = await mutationProgram();
   const fake = new FakeChrome(program.target.url, "mutation");
@@ -689,6 +804,8 @@ await testScrollingCollectionDeduplicatesAndStopsAtBound();
 await testPrivateBrowserLogCaptureIsBoundedAndCleanedUp();
 await testPrivateRequestCaptureDropsSensitivePayloadsAndCleansUp();
 await testInvalidPrivateRequestFailsClosedAndCleansUp();
+await testPrivateConsoleCaptureKeepsOnlyBoundedScalarsAndCleansUp();
+await testInvalidPrivateConsoleEventFailsClosedAndCleansUp();
 await testMutationDenialFailsClosed();
 await testTargetDriftIsNotRetried();
 await testCancellationFailsClosed();

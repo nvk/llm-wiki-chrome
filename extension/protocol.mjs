@@ -9,6 +9,7 @@ const ALLOWED_OPERATIONS = new Set([
   "extract_ax_collection", "collect_ax_by_scrolling", "capture_viewport_private",
   "scroll_viewport", "start_log_capture", "stop_log_capture", "before_mutation",
   "start_request_capture", "stop_request_capture",
+  "start_console_capture", "stop_console_capture",
 ]);
 const FORBIDDEN_KEYS = new Set([
   "javascript", "script", "expression", "runtime_evaluate", "cdp_method",
@@ -45,6 +46,7 @@ const ACTION_KEYS = new Map([
   ["before_mutation", new Set(["op"])],
   ["stop_log_capture", new Set(["op"])],
   ["stop_request_capture", new Set(["op"])],
+  ["stop_console_capture", new Set(["op"])],
   ["wait_ax", new Set(["op", "locator", "timeout_ms"])],
   ["wait_dom", new Set(["op", "locator", "timeout_ms"])],
   ["assert_ax", new Set(["op", "locator"])],
@@ -65,6 +67,9 @@ const ACTION_KEYS = new Map([
   ["scroll_viewport", new Set(["op", "direction", "distance_px"])],
   ["start_log_capture", new Set(["op", "private_result", "max_entries", "max_text_bytes"])],
   ["start_request_capture", new Set(["op", "private_result", "max_entries", "max_url_bytes"])],
+  ["start_console_capture", new Set([
+    "op", "private_result", "max_entries", "max_arguments", "max_argument_bytes",
+  ])],
   ["first_success", new Set(["op", "branches"])],
 ]);
 const EXTRACTION_FIELDS = new Set([
@@ -310,6 +315,15 @@ function validateAction(action, program, index) {
        action.max_url_bytes < 256 || action.max_url_bytes > 16384)) {
     throw new Error("A private request capture declaration is invalid.");
   }
+  if (action.op === "start_console_capture" &&
+      (!program.result.private_fields.includes(action.private_result) ||
+       !Number.isInteger(action.max_entries) || action.max_entries < 1 || action.max_entries > 500 ||
+       !Number.isInteger(action.max_arguments) ||
+       action.max_arguments < 1 || action.max_arguments > 20 ||
+       !Number.isInteger(action.max_argument_bytes) ||
+       action.max_argument_bytes < 256 || action.max_argument_bytes > 16384)) {
+    throw new Error("A private console capture declaration is invalid.");
+  }
 }
 
 export function validatePrivateValues(program, values) {
@@ -422,11 +436,21 @@ export async function validateProgram(program) {
        operations.indexOf("start_request_capture") >= operations.indexOf("stop_request_capture"))) {
     throw new Error("The private request capture lifecycle is invalid.");
   }
+  const consoleStarts = operations.filter((operation) => operation === "start_console_capture").length;
+  const consoleStops = operations.filter((operation) => operation === "stop_console_capture").length;
+  if (consoleStarts !== consoleStops || consoleStarts > 1 ||
+      topLevel.filter((operation) => operation === "start_console_capture").length !== consoleStarts ||
+      topLevel.filter((operation) => operation === "stop_console_capture").length !== consoleStops ||
+      (consoleStarts === 1 &&
+       operations.indexOf("start_console_capture") >= operations.indexOf("stop_console_capture"))) {
+    throw new Error("The private console capture lifecycle is invalid.");
+  }
   const extracted = new Set(
     flat.filter((action) => [
       "extract_ax", "extract_ax_collection", "collect_ax_by_scrolling", "capture_viewport_private",
       "start_log_capture",
       "start_request_capture",
+      "start_console_capture",
     ].includes(action.op))
       .map((action) => action.private_result),
   );

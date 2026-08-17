@@ -36,7 +36,7 @@ browser planner into this repository.
 | Browser log entries | Paired, bounded exact-tab CDP Log window with private-only scalar results | Implemented in source; live-browser gate pending |
 | Multiple tabs | Explicit job-owned tabs/group only, never ambient tabs | Later typed protocol version |
 | Request debugging | Paired exact-tab request metadata capture without queries, headers, bodies, cookies, IDs, or interception | Implemented in source; live-browser gate pending |
-| Console API debugging | Separate bounded private `Runtime.consoleAPICalled` design with remote-object exclusion | Later read-only debug capability |
+| Console API debugging | Paired exact-tab `Runtime.consoleAPICalled` capture with bounded scalar-only arguments and no evaluation or object dereferencing | Implemented in source; live-browser gate pending |
 | Downloads and uploads | Registered file roots, typed operations, provider verification | Later explicit effect capability |
 | Workflow recording / shortcuts | Record only typed actions, require review and signing before replay | Later targeted-adapter tooling |
 | Scheduled/background tasks | External scheduler plus durable adapter journal | Later; never extension-owned intent |
@@ -55,8 +55,8 @@ mutation challenge. It retains the existing two reviewed production origins.
 
 Deterministic tests cover signed-program validation, exact-origin tab queries,
 DOM fallback, private AX extraction, private insertion, one mutation challenge,
-denial, cancellation, target drift, paired browser-log and request-metadata
-capture with cleanup, service-worker result filtering, and content-free
+denial, cancellation, target drift, paired browser-log, request-metadata, and
+scalar-only console-API capture with cleanup, service-worker result filtering, and content-free
 invalid-program failure. A separate Chrome-for-Testing harness is
 ready to load a temporary unpacked copy, open a runtime-supplied exact approved
 target, and prove real `chrome.tabs`, `chrome.debugger`, CDP screenshot,
@@ -66,8 +66,8 @@ Mach-service policy, so a successful real-browser result remains pending in an
 allowed local test profile. Live targeted-adapter shadow runs remain the next
 gate; this source state has not been released or installed as an upgrade.
 
-Arbitrary sites, tab groups, console-API diagnostics, downloads/uploads,
-recording, schedules, and notifications are separate review events rather than
+Arbitrary sites, tab groups, downloads/uploads, recording, schedules, and
+notifications are separate review events rather than
 prerequisites for this slice. The viewport-only JPEG action was added without a
 new permission: it is exact-target, quality- and byte-capped, declared as a
 private result, and never persisted or uploaded by the executor.

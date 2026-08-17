@@ -14,7 +14,7 @@ The extension independently validates the signed program and private-slot
 shape. The Python and extension validators both reject origins outside the same
 explicit production allowlist. The extension activates one exact tab, aborts on
 target or focus drift, uses only a
-hardcoded DOM/Accessibility/Input/Page/Log/Network CDP allowlist, and detaches the debugger
+hardcoded DOM/Accessibility/Input/Page/Log/Network/Runtime CDP allowlist, and detaches the debugger
 in a `finally` path. Waits retry only locator-not-ready conditions; cancellation,
 deadline, debugger, and target errors fail immediately. Public results are
 filtered to declared content-free counters, while bounded page data is returned
@@ -35,6 +35,15 @@ status, MIME type, cache, and failure scalars. Query strings, credentials,
 headers, request and response bodies, cookies, initiators, security details,
 request IDs, WebSocket payloads, and interception are never retained or
 exposed. The listener and Network domain are removed during failure cleanup.
+
+Console diagnostics are limited to one paired
+`Runtime.enable`/`Runtime.disable` window on that same exact tab and only the
+`Runtime.consoleAPICalled` event. The private result retains bounded call type,
+timestamp, and scalar arguments. Contexts, stack traces, object descriptions,
+previews, object IDs, and non-scalar values are ignored. Evaluation,
+compilation, function invocation, script execution, promise access, and remote
+property access are absent from the fixed CDP method allowlist. The listener
+and Runtime domain are removed during failure cleanup.
 
 This design deliberately excludes arbitrary JavaScript, `Runtime.evaluate`, raw
 CDP method names, ambient tab enumeration, page-authored actions, broad origins,
