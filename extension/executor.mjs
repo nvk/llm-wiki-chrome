@@ -89,10 +89,17 @@ function keyDefinition(name, platform) {
 }
 
 export class BrowserExecutor {
-  constructor({chromeApi, platform = "unknown", isCancelled = () => false, targetTabId = null}) {
+  constructor({
+    chromeApi,
+    platform = "unknown",
+    isCancelled = () => false,
+    onProgress = () => {},
+    targetTabId,
+  }) {
     this.chrome = chromeApi;
     this.platform = platform;
     this.isCancelled = isCancelled;
+    this.onProgress = onProgress;
     this.program = null;
     this.privateValues = {};
     this.privateResults = {};
@@ -144,6 +151,11 @@ export class BrowserExecutor {
       this.checkDeadline();
       this.actionCount += 1;
       if (this.actionCount > this.program.limits.max_actions) fail("action-limit-exceeded");
+      this.onProgress({
+        actionCount: this.actionCount,
+        maxActions: this.program.limits.max_actions,
+        mutationStarted: this.mutationStarted,
+      });
       if (this.tabId !== null && action.op !== "open_or_focus_exact_url") {
         await this.assertExactTarget();
       }
@@ -168,6 +180,7 @@ export class BrowserExecutor {
       dispatch_key_chord: () => this.dispatchKeyChord(action.keys),
       insert_private_text: () => this.insertPrivateText(action.slot, action.replace_all),
       assert_ax_private_value: () => this.assertFocusedPrivateValue(action.slot),
+      assert_ax_private_sha256: () => this.assertAXPrivateSHA256(action),
       extract_ax: () => this.extractAX(action),
       extract_ax_collection: () => this.extractAX(action),
       collect_ax_by_scrolling: () => this.collectAXByScrolling(action),
@@ -188,43 +201,20 @@ export class BrowserExecutor {
 
   async openOrFocus() {
     if (this.tabId !== null) fail("target-already-opened");
-    if (this.targetTabId !== null) {
-      let tab;
-      try {
-        tab = await this.chrome.tabs.get(this.targetTabId);
-        if (tab.url !== this.expectedUrl && tab.pendingUrl !== this.expectedUrl) {
-          fail("collaboration-target-drift");
-        }
-        this.tabId = this.targetTabId;
-        await this.chrome.windows.update(tab.windowId, {focused: true});
-        await this.chrome.tabs.update(this.tabId, {active: true});
-        await this.waitForTab(this.expectedUrl);
-      } catch (error) {
-        if (error instanceof ExecutionError) throw error;
-        fail("collaboration-target-lost");
+    if (this.targetTabId === null) fail("collaboration-target-missing");
+    let tab;
+    try {
+      tab = await this.chrome.tabs.get(this.targetTabId);
+      if (tab.url !== this.expectedUrl && tab.pendingUrl !== this.expectedUrl) {
+        fail("collaboration-target-drift");
       }
-      await this.assertExactTarget();
-      return;
-    }
-    let tabs;
-    try {
-      tabs = await this.chrome.tabs.query({url: [`${this.program.target.origin}/*`]});
-    } catch (_error) {
-      fail("target-query-failed");
-    }
-    const exact = tabs.filter((tab) => tab.url === this.expectedUrl || tab.pendingUrl === this.expectedUrl);
-    if (exact.length > 1) fail("target-tab-ambiguous");
-    let tab = exact[0];
-    try {
-      if (!tab) tab = await this.chrome.tabs.create({url: this.expectedUrl, active: true});
-      this.tabId = tab.id;
-      if (!Number.isInteger(this.tabId)) fail("target-tab-invalid");
+      this.tabId = this.targetTabId;
       await this.chrome.windows.update(tab.windowId, {focused: true});
       await this.chrome.tabs.update(this.tabId, {active: true});
       await this.waitForTab(this.expectedUrl);
     } catch (error) {
       if (error instanceof ExecutionError) throw error;
-      fail("target-activation-failed");
+      fail("collaboration-target-lost");
     }
     await this.assertExactTarget();
   }
@@ -492,6 +482,25 @@ export class BrowserExecutor {
     if (matching.length !== 1) {
       fail("private-value-mismatch");
     }
+  }
+
+  async assertAXPrivateSHA256(action) {
+    const expected = this.privateValues[action.slot];
+    if (typeof expected !== "string" || !/^[a-f0-9]{64}$/u.test(expected)) {
+      fail("private-hash-invalid");
+    }
+    const matches = await this.findAX(action.locator, false);
+    const snapshot = matches
+      .slice(0, action.max_items)
+      .map((node) => this.extractNode(node, action.fields));
+    const canonical = snapshot.map((row) => Object.fromEntries(
+      Object.keys(row).sort().map((key) => [key, row[key]]),
+    ));
+    const bytes = new TextEncoder().encode(JSON.stringify(canonical));
+    if (bytes.length > MAX_PRIVATE_RESULTS_BYTES) fail("private-result-too-large");
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    const actual = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    if (actual !== expected) fail("private-snapshot-mismatch");
   }
 
   safeExtractedValue(value) {
@@ -976,8 +985,14 @@ export class BrowserExecutor {
   async beforeMutation() {
     if (this.program.capability !== "mutation" || this.mutationStarted) fail("mutation-state-invalid");
     const authorized = await this.requestMutation();
+    this.checkDeadline();
     if (authorized !== true) fail("mutation-denied");
     await this.assertExactTarget();
     this.mutationStarted = true;
+    this.onProgress({
+      actionCount: this.actionCount,
+      maxActions: this.program.limits.max_actions,
+      mutationStarted: true,
+    });
   }
 }

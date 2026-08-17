@@ -5,6 +5,7 @@ const ALLOWED_OPERATIONS = new Set([
   "attach_debugger", "detach_debugger", "wait_ax", "wait_dom", "assert_ax",
   "first_success", "click_ax", "click_dom", "focus_ax", "dispatch_key_chord",
   "insert_private_text", "assert_ax_private_value", "extract_ax",
+  "assert_ax_private_sha256",
   "extract_ax_collection", "collect_ax_by_scrolling", "capture_viewport_private",
   "scroll_viewport", "start_log_capture", "stop_log_capture", "before_mutation",
   "start_request_capture", "stop_request_capture",
@@ -25,6 +26,7 @@ const MUTATION_ONLY = new Set(["insert_private_text", "before_mutation"]);
 const LOCATOR_OPERATIONS = new Set([
   "wait_ax", "wait_dom", "assert_ax", "click_ax", "click_dom", "focus_ax",
   "extract_ax", "extract_ax_collection", "collect_ax_by_scrolling",
+  "assert_ax_private_sha256",
 ]);
 const DOM_LOCATOR_OPERATIONS = new Set(["wait_dom", "click_dom"]);
 const AX_IDENTITY_KEYS = new Set([
@@ -55,6 +57,7 @@ const ACTION_KEYS = new Map([
   ["dispatch_key_chord", new Set(["op", "keys"])],
   ["insert_private_text", new Set(["op", "slot", "replace_all"])],
   ["assert_ax_private_value", new Set(["op", "slot"])],
+  ["assert_ax_private_sha256", new Set(["op", "slot", "locator", "fields", "max_items"])],
   ["extract_ax", new Set(["op", "locator", "fields", "private_result", "max_items"])],
   ["extract_ax_collection", new Set(["op", "locator", "fields", "private_result", "max_items"])],
   ["collect_ax_by_scrolling", new Set([
@@ -256,19 +259,22 @@ function validateAction(action, program, index) {
        new Set(action.keys).size !== action.keys.length || action.keys.some((key) => !KEY_NAMES.has(key)))) {
     throw new Error("A key chord is invalid.");
   }
-  if (["insert_private_text", "assert_ax_private_value"].includes(action.op) &&
+  if (["insert_private_text", "assert_ax_private_value", "assert_ax_private_sha256"].includes(action.op) &&
       !program.private_slots.includes(action.slot)) {
     throw new Error("An action references an undeclared private slot.");
   }
   if (action.op === "insert_private_text" && typeof action.replace_all !== "boolean") {
     throw new Error("A private insertion mode is invalid.");
   }
-  if (["extract_ax", "extract_ax_collection", "collect_ax_by_scrolling"].includes(action.op)) {
+  if ([
+    "extract_ax", "extract_ax_collection", "collect_ax_by_scrolling", "assert_ax_private_sha256",
+  ].includes(action.op)) {
     const maximum = action.op === "extract_ax" ? 100 : 5000;
     if (!Array.isArray(action.fields) || action.fields.length < 1 ||
         new Set(action.fields).size !== action.fields.length ||
         action.fields.some((field) => !EXTRACTION_FIELDS.has(field)) ||
-        !program.result.private_fields.includes(action.private_result) ||
+        (action.op !== "assert_ax_private_sha256" &&
+          !program.result.private_fields.includes(action.private_result)) ||
         !Number.isInteger(action.max_items) || action.max_items < 1 || action.max_items > maximum) {
       throw new Error("A private extraction is invalid.");
     }

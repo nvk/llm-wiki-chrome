@@ -45,6 +45,7 @@ ALLOWED_OPERATIONS = {
     "dispatch_key_chord",
     "insert_private_text",
     "assert_ax_private_value",
+    "assert_ax_private_sha256",
     "extract_ax",
     "extract_ax_collection",
     "collect_ax_by_scrolling",
@@ -110,6 +111,7 @@ ACTION_KEYS = {
     "dispatch_key_chord": {"op", "keys"},
     "insert_private_text": {"op", "slot", "replace_all"},
     "assert_ax_private_value": {"op", "slot"},
+    "assert_ax_private_sha256": {"op", "slot", "locator", "fields", "max_items"},
     "extract_ax": {"op", "locator", "fields", "private_result", "max_items"},
     "extract_ax_collection": {"op", "locator", "fields", "private_result", "max_items"},
     "collect_ax_by_scrolling": {
@@ -136,6 +138,7 @@ LOCATOR_OPERATIONS = {
     "extract_ax",
     "extract_ax_collection",
     "collect_ax_by_scrolling",
+    "assert_ax_private_sha256",
 }
 DOM_LOCATOR_OPERATIONS = {"wait_dom", "click_dom"}
 AX_IDENTITY_KEYS = {
@@ -423,12 +426,17 @@ def _validate_action(
             raise ProtocolError("key chord is invalid or unbounded")
         if len(keys) != len(set(keys)):
             raise ProtocolError("key chord is invalid or unbounded")
-    if operation in {"insert_private_text", "assert_ax_private_value"}:
+    if operation in {"insert_private_text", "assert_ax_private_value", "assert_ax_private_sha256"}:
         if action.get("slot") not in slots:
             raise ProtocolError("action references an undeclared private slot")
         if operation == "insert_private_text" and not isinstance(action.get("replace_all"), bool):
             raise ProtocolError("insert_private_text requires replace_all")
-    if operation in {"extract_ax", "extract_ax_collection", "collect_ax_by_scrolling"}:
+    if operation in {
+        "extract_ax",
+        "extract_ax_collection",
+        "collect_ax_by_scrolling",
+        "assert_ax_private_sha256",
+    }:
         fields = action.get("fields")
         if (
             not isinstance(fields, list)
@@ -440,7 +448,7 @@ def _validate_action(
         if len(fields) != len(set(fields)):
             raise ProtocolError("extraction fields are invalid")
         private_result = action.get("private_result")
-        if private_result not in private_results:
+        if operation != "assert_ax_private_sha256" and private_result not in private_results:
             raise ProtocolError("extraction references an undeclared private result")
         max_items = action.get("max_items")
         maximum = 100 if operation == "extract_ax" else 5000

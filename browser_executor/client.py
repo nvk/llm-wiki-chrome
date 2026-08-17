@@ -124,8 +124,7 @@ class BrowserExecutorClient:
         self.socket_path = (socket_path or native_socket_path()).resolve(strict=False)
         self.timeout_seconds = max(10, min(timeout_seconds, 300))
 
-    def current_collaboration(self) -> dict[str, str] | None:
-        """Return the exact user-exposed HTTPS target, or None when no tab is shared."""
+    def _query_connector(self, message_type: str) -> dict[str, Any]:
         try:
             validate_private_socket(self.socket_path)
         except StorageError as exc:
@@ -139,26 +138,19 @@ class BrowserExecutorClient:
                 raise ClientError("browser executor connector is unavailable") from exc
             _send_line(connection, {
                 "protocol": BROWSER_PROTOCOL,
-                "type": "collaboration-query",
+                "type": message_type,
             })
-            message = _receive_line(connection, bytearray())
+            return _receive_line(connection, bytearray())
         finally:
             connection.close()
-        if message.get("type") != "collaboration-status" or message.get("state") not in {
-            "active", "inactive",
-        }:
+
+    @staticmethod
+    def _validate_collaboration(value: Any) -> dict[str, str]:
+        if not isinstance(value, dict) or set(value) != {"collaboration_id", "url", "origin"}:
             raise ClientError("browser executor returned invalid collaboration state")
-        if message["state"] == "inactive":
-            if set(message) != {"protocol", "type", "state"}:
-                raise ClientError("browser executor returned invalid collaboration state")
-            return None
-        if set(message) != {
-            "protocol", "type", "state", "collaboration_id", "url", "origin",
-        }:
-            raise ClientError("browser executor returned invalid collaboration state")
-        collaboration_id = message.get("collaboration_id")
-        raw_url = message.get("url")
-        raw_origin = message.get("origin")
+        collaboration_id = value.get("collaboration_id")
+        raw_url = value.get("url")
+        raw_origin = value.get("origin")
         if (
             not isinstance(collaboration_id, str)
             or not COLLABORATION_ID.fullmatch(collaboration_id)
@@ -181,6 +173,67 @@ class BrowserExecutorClient:
             "url": raw_url,
             "origin": raw_origin,
         }
+
+    def _collaboration_workspace(self) -> dict[str, Any]:
+        message = self._query_connector("collaboration-list-query")
+        if set(message) != {
+            "protocol", "type", "selected_collaboration_id", "collaborations",
+        } or message.get("type") != "collaboration-list":
+            raise ClientError("browser executor returned invalid collaboration workspace")
+        raw_collaborations = message.get("collaborations")
+        if not isinstance(raw_collaborations, list) or len(raw_collaborations) > 16:
+            raise ClientError("browser executor returned invalid collaboration workspace")
+        collaborations = [self._validate_collaboration(value) for value in raw_collaborations]
+        identifiers = {value["collaboration_id"] for value in collaborations}
+        urls = {value["url"] for value in collaborations}
+        if len(identifiers) != len(collaborations) or len(urls) != len(collaborations):
+            raise ClientError("browser executor returned duplicate collaboration targets")
+        selected = message.get("selected_collaboration_id")
+        if selected is not None and (
+            not isinstance(selected, str)
+            or not COLLABORATION_ID.fullmatch(selected)
+            or selected not in identifiers
+        ):
+            raise ClientError("browser executor returned invalid selected collaboration")
+        return {
+            "selected_collaboration_id": selected,
+            "collaborations": collaborations,
+        }
+
+    def collaborations(self) -> list[dict[str, str]]:
+        """Return every exact HTTPS tab the user explicitly shared."""
+        workspace = self._collaboration_workspace()
+        selected = workspace["selected_collaboration_id"]
+        return sorted(
+            workspace["collaborations"],
+            key=lambda value: value["collaboration_id"] != selected,
+        )
+
+    def collaboration_for_url(self, raw_url: str) -> dict[str, str] | None:
+        """Return the unique explicit grant for an exact HTTPS URL."""
+        if not isinstance(raw_url, str) or len(raw_url.encode("utf-8")) > MAX_PRIVATE_VALUE_BYTES:
+            raise ClientError("collaboration URL is invalid")
+        url = urlsplit(raw_url)
+        if (
+            url.scheme != "https"
+            or not url.hostname
+            or url.username is not None
+            or url.password is not None
+        ):
+            raise ClientError("collaboration URL is invalid")
+        matches = [value for value in self.collaborations() if value["url"] == raw_url]
+        if len(matches) > 1:
+            raise ClientError("browser executor returned an ambiguous collaboration target")
+        return matches[0] if matches else None
+
+    def current_collaboration(self) -> dict[str, str] | None:
+        """Return the most recently selected explicit tab, preserving the v1 client API."""
+        workspace = self._collaboration_workspace()
+        selected = workspace["selected_collaboration_id"]
+        return next((
+            value for value in workspace["collaborations"]
+            if value["collaboration_id"] == selected
+        ), None)
 
     def run(
         self,

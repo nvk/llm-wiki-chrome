@@ -109,35 +109,44 @@ class NativeMessagingTests(unittest.TestCase):
         finally:
             client_side.close()
 
-    def test_collaboration_handoff_is_ephemeral_exact_and_queryable(self) -> None:
+    def test_collaboration_workspace_is_ephemeral_exact_and_queryable(self) -> None:
         relay = NativeRelay(io.BytesIO(), io.BytesIO(), Path("/tmp/synthetic-relay.sock"))
-        update = {
-            "protocol": BROWSER_PROTOCOL,
-            "type": "collaboration",
-            "state": "active",
+        first = {
             "collaboration_id": "c" * 64,
             "url": "https://example.invalid/private?synthetic=1",
             "origin": "https://example.invalid",
+        }
+        second = {
+            "collaboration_id": "d" * 64,
+            "url": "https://two.invalid/private",
+            "origin": "https://two.invalid",
+        }
+        update = {
+            "protocol": BROWSER_PROTOCOL,
+            "type": "collaborations",
+            "selected_collaboration_id": second["collaboration_id"],
+            "collaborations": [first, second],
         }
         relay._update_collaboration(update)
         relay_side, client_side = socket.socketpair()
         try:
             client_side.sendall(json.dumps({
                 "protocol": BROWSER_PROTOCOL,
-                "type": "collaboration-query",
+                "type": "collaboration-list-query",
             }, separators=(",", ":")).encode("utf-8") + b"\n")
             relay._handle_agent(relay_side)
             response = json.loads(client_side.recv(4096).decode("utf-8"))
-            self.assertEqual(response["state"], "active")
-            self.assertEqual(response["collaboration_id"], "c" * 64)
-            self.assertEqual(response["url"], update["url"])
+            self.assertEqual(response["type"], "collaboration-list")
+            self.assertEqual(response["selected_collaboration_id"], "d" * 64)
+            self.assertEqual(response["collaborations"], [first, second])
         finally:
             client_side.close()
 
         relay._update_collaboration({
             "protocol": BROWSER_PROTOCOL,
-            "type": "collaboration",
-            "state": "inactive",
+            "type": "collaborations",
+            "selected_collaboration_id": None,
+            "collaborations": [],
         })
         self.assertEqual(relay._collaboration_status(), {
             "protocol": BROWSER_PROTOCOL,
@@ -145,7 +154,7 @@ class NativeMessagingTests(unittest.TestCase):
             "state": "inactive",
         })
 
-    def test_collaboration_handoff_rejects_insecure_or_mismatched_targets(self) -> None:
+    def test_collaboration_workspace_rejects_insecure_mismatched_or_duplicate_targets(self) -> None:
         relay = NativeRelay(io.BytesIO(), io.BytesIO(), Path("/tmp/synthetic-relay.sock"))
         for url, origin in (
             ("http://example.invalid/private", "http://example.invalid"),
@@ -154,12 +163,32 @@ class NativeMessagingTests(unittest.TestCase):
             with self.subTest(url=url), self.assertRaises(NativeMessagingError):
                 relay._update_collaboration({
                     "protocol": BROWSER_PROTOCOL,
-                    "type": "collaboration",
-                    "state": "active",
-                    "collaboration_id": "c" * 64,
-                    "url": url,
-                    "origin": origin,
+                    "type": "collaborations",
+                    "selected_collaboration_id": "c" * 64,
+                    "collaborations": [{
+                        "collaboration_id": "c" * 64,
+                        "url": url,
+                        "origin": origin,
+                    }],
                 })
+        with self.assertRaisesRegex(NativeMessagingError, "duplicates"):
+            relay._update_collaboration({
+                "protocol": BROWSER_PROTOCOL,
+                "type": "collaborations",
+                "selected_collaboration_id": "c" * 64,
+                "collaborations": [
+                    {
+                        "collaboration_id": "c" * 64,
+                        "url": "https://example.invalid/one",
+                        "origin": "https://example.invalid",
+                    },
+                    {
+                        "collaboration_id": "d" * 64,
+                        "url": "https://example.invalid/one",
+                        "origin": "https://example.invalid",
+                    },
+                ],
+            })
 
     def test_installer_pins_exact_extension_origin_and_private_modes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

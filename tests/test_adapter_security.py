@@ -65,6 +65,7 @@ class AdapterAndSecurityTests(unittest.TestCase):
                 self.assertNotIn(diagnostic_method, source)
         self.assertIn('error: "invalid-program"', source)
         self.assertNotIn("typed-execution-disabled", source)
+        self.assertNotIn("tabs.query", source)
 
     @unittest.skipUnless(shutil.which("node"), "Node is required for the MV3 contract check")
     def test_service_worker_independently_validates_signed_programs(self) -> None:
@@ -99,7 +100,9 @@ validateProgram(program).then(() => {
         self.assertNotIn("textarea", html.lower())
         self.assertNotIn("innerHTML", script)
         self.assertIn("never displays page or job content", html)
-        self.assertIn("Stop collaboration", html)
+        self.assertIn("Shared tabs", html)
+        self.assertIn("Stop all", html)
+        self.assertIn("Cancel job", html)
 
     def test_describe_matches_manifest(self) -> None:
         manifest = json.loads((ROOT / ".llm-wiki-adapter.json").read_text(encoding="utf-8"))

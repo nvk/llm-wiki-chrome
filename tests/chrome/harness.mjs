@@ -70,7 +70,13 @@ async function run() {
   program.program_sha256 = await canonicalProgramHash(program);
   await validateProgram(program);
 
-  const executor = new BrowserExecutor({chromeApi: chrome, platform: platform.os});
+  const targetTab = await chrome.tabs.create({url: targetUrl, active: true});
+  if (!Number.isInteger(targetTab.id)) throw new Error("missing-target-tab");
+  const executor = new BrowserExecutor({
+    chromeApi: chrome,
+    platform: platform.os,
+    targetTabId: targetTab.id,
+  });
   const result = await executor.run(program, {}, async () => false);
   const capture = result.private["page.viewport"];
   if (capture?.mime_type !== "image/jpeg" || typeof capture.data_base64 !== "string") {

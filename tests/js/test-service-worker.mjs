@@ -51,13 +51,23 @@ class NativePort {
 
 const nativePort = new NativePort();
 const stored = {};
-let tab = {
-  id: 1,
-  windowId: 1,
-  url: "https://x.com/i/spaces/SYNTHETIC_SPACE",
-  active: true,
-  status: "complete",
-};
+const badges = new Map();
+const tabs = new Map([
+  [1, {
+    id: 1,
+    windowId: 1,
+    url: "https://x.com/i/spaces/SYNTHETIC_SPACE",
+    active: true,
+    status: "complete",
+  }],
+  [2, {
+    id: 2,
+    windowId: 1,
+    url: "https://example.invalid/synthetic",
+    active: false,
+    status: "complete",
+  }],
+]);
 let attached = false;
 
 globalThis.chrome = {
@@ -68,7 +78,7 @@ globalThis.chrome = {
     },
   },
   action: {
-    setBadgeText: async () => {},
+    setBadgeText: async ({tabId, text}) => badges.set(tabId, text),
     setBadgeBackgroundColor: async () => {},
     onClicked: new EventHook(),
   },
@@ -84,22 +94,24 @@ globalThis.chrome = {
   tabs: {
     onUpdated: new EventHook(),
     onRemoved: new EventHook(),
-    query: async (query) => {
-      assert.deepEqual(query, {url: ["https://x.com/*"]});
-      return tab ? [structuredClone(tab)] : [];
-    },
     create: async ({url, active}) => {
-      tab = {id: 1, windowId: 1, url, active, status: "complete"};
-      return structuredClone(tab);
+      const value = {id: 3, windowId: 1, url, active, status: "complete"};
+      tabs.set(value.id, value);
+      return structuredClone(value);
     },
     update: async (tabId, changes) => {
-      assert.equal(tabId, tab.id);
-      Object.assign(tab, changes);
-      return structuredClone(tab);
+      const value = tabs.get(tabId);
+      assert.ok(value);
+      if (changes.active) {
+        for (const candidate of tabs.values()) candidate.active = candidate.id === tabId;
+      }
+      Object.assign(value, changes);
+      return structuredClone(value);
     },
     get: async (tabId) => {
-      assert.equal(tabId, tab.id);
-      return structuredClone(tab);
+      const value = tabs.get(tabId);
+      if (!value) throw new Error("synthetic tab is closed");
+      return structuredClone(value);
     },
   },
   windows: {
@@ -132,15 +144,50 @@ globalThis.chrome = {
   },
 };
 
+async function waitFor(predicate) {
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    const value = predicate();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error("Timed out waiting for synthetic extension state");
+}
+
+async function runtimeMessage(message) {
+  const listener = chrome.runtime.onMessage.listeners[0];
+  return new Promise((resolve) => {
+    const asynchronous = listener(message, {}, resolve);
+    if (asynchronous === false) queueMicrotask(() => resolve(undefined));
+  });
+}
+
 await import("../../extension/service-worker.js");
 nativePort.onMessage.emit({protocol: PROTOCOL, type: "ready"});
-chrome.action.onClicked.emit(structuredClone(tab));
-while (!stored.activeCollaboration) {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
-assert.equal(stored.activeCollaboration.url, tab.url);
-assert.match(stored.activeCollaboration.collaboration_id, /^[a-f0-9]{64}$/u);
-await nativePort.next((message) => message.type === "collaboration" && message.state === "active");
+
+chrome.action.onClicked.emit(structuredClone(tabs.get(1)));
+await waitFor(() => stored.collaborationWorkspace?.collaborations?.length === 1);
+assert.equal(stored.collaborationWorkspace.collaborations[0].url, tabs.get(1).url);
+assert.match(stored.collaborationWorkspace.collaborations[0].collaboration_id, /^[a-f0-9]{64}$/u);
+assert.equal(badges.get(1), "ON");
+await nativePort.next((message) => message.type === "collaborations" && message.collaborations.length === 1);
+
+tabs.get(1).active = false;
+tabs.get(2).active = true;
+chrome.action.onClicked.emit(structuredClone(tabs.get(2)));
+await waitFor(() => stored.collaborationWorkspace?.collaborations?.length === 2);
+assert.equal(badges.get(1), "ON");
+assert.equal(badges.get(2), "ON");
+const listMessage = await nativePort.next(
+  (message) => message.type === "collaborations" && message.collaborations.length === 2,
+);
+assert.equal(listMessage.selected_collaboration_id, stored.collaborationWorkspace.selected_collaboration_id);
+
+const status = await runtimeMessage({type: "get-status"});
+assert.equal(status.collaborations.length, 2);
+assert.equal(status.collaborations.filter((value) => value.selected).length, 1);
+assert.ok(status.collaborations.every((value) => !Object.hasOwn(value, "url")));
+assert.ok(status.collaborations.every((value) => !Object.hasOwn(value, "current")));
 
 async function program(capability) {
   const actions = [
@@ -149,6 +196,7 @@ async function program(capability) {
     ...(capability === "mutation" ? [{op: "before_mutation"}] : []),
     {op: "detach_debugger"},
   ];
+  const collaboration = stored.collaborationWorkspace.collaborations.find((value) => value.tab_id === 1);
   const value = {
     protocol: PROTOCOL,
     program_id: `synthetic-${capability}-v1`,
@@ -157,10 +205,10 @@ async function program(capability) {
     driver: {id: "synthetic-driver", version: "0.0.1"},
     capability,
     target: {
-      url: "https://x.com/i/spaces/SYNTHETIC_SPACE",
-      origin: "https://x.com",
+      url: collaboration.url,
+      origin: collaboration.origin,
       path_prefixes: ["/i/spaces/SYNTHETIC_SPACE"],
-      collaboration_id: stored.activeCollaboration.collaboration_id,
+      collaboration_id: collaboration.collaboration_id,
     },
     limits: {timeout_ms: 5000, max_actions: 10, max_repeat: 2},
     private_slots: [],
@@ -184,13 +232,13 @@ assert.equal(readResult.status, "ok");
 assert.deepEqual(readResult.public, {status: "ok"});
 assert.deepEqual(readResult.private, {});
 assert.equal(attached, false);
-await new Promise((resolve) => setTimeout(resolve, 0));
+await waitFor(() => stored.activeJobState === null);
+await waitFor(() => stored.nativeConnectorState?.state === "connected");
 assert.deepEqual(stored.nativeConnectorState, {
   state: "connected",
   detail: "Ready for an exact-target job.",
 });
 
-await new Promise((resolve) => setTimeout(resolve, 0));
 const mutationProgram = await program("mutation");
 const mutationStart = nativePort.sent.length;
 nativePort.onMessage.emit({
@@ -201,8 +249,8 @@ nativePort.onMessage.emit({
   private_values: {},
 });
 await nativePort.next((message) => message.type === "before-mutation", mutationStart);
-await new Promise((resolve) => setTimeout(resolve, 0));
-assert.equal(stored.nativeConnectorState.state, "authorizing");
+await waitFor(() => stored.activeJobState?.state === "authorizing");
+assert.ok(stored.activeJobState.action_count >= 1);
 nativePort.onMessage.emit({
   protocol: PROTOCOL,
   type: "mutation-authorized",
@@ -213,10 +261,26 @@ const mutationResult = await nativePort.next((message) => message.type === "resu
 assert.equal(mutationResult.status, "ok");
 assert.deepEqual(mutationResult.public, {status: "ok"});
 assert.equal(attached, false);
-await new Promise((resolve) => setTimeout(resolve, 0));
-assert.equal(stored.nativeConnectorState.state, "connected");
+await waitFor(() => stored.activeJobState === null);
 
-await new Promise((resolve) => setTimeout(resolve, 0));
+const cancelledStart = nativePort.sent.length;
+nativePort.onMessage.emit({
+  protocol: PROTOCOL,
+  type: "job",
+  job_id: JOB_ID,
+  program: mutationProgram,
+  private_values: {},
+});
+await nativePort.next((message) => message.type === "before-mutation", cancelledStart);
+assert.equal((await runtimeMessage({type: "cancel-job"})).cancelled, true);
+const cancelledResult = await nativePort.next(
+  (message) => message.type === "result",
+  cancelledStart,
+);
+assert.equal(cancelledResult.status, "error");
+assert.equal(cancelledResult.error, "job-cancelled");
+await waitFor(() => stored.activeJobState === null);
+
 const invalidStart = nativePort.sent.length;
 nativePort.onMessage.emit({
   protocol: PROTOCOL,
@@ -248,10 +312,27 @@ const wrongGrantResult = await nativePort.next(
 );
 assert.equal(wrongGrantResult.error, "collaboration-required");
 
-chrome.tabs.onUpdated.emit(tab.id, {url: `${tab.url}?drift=1`});
-tab.url = `${tab.url}?drift=1`;
-await new Promise((resolve) => setTimeout(resolve, 0));
-await new Promise((resolve) => setTimeout(resolve, 0));
-assert.equal(stored.activeCollaboration, null);
+const second = stored.collaborationWorkspace.collaborations.find((value) => value.tab_id === 2);
+assert.equal((await runtimeMessage({
+  type: "revoke-collaboration",
+  collaboration_id: second.collaboration_id,
+})).stopped, true);
+await waitFor(() => stored.collaborationWorkspace.collaborations.length === 1);
+assert.equal(badges.get(2), "");
+
+const prior = stored.collaborationWorkspace.collaborations[0];
+tabs.get(1).url = `${tabs.get(1).url}/details`;
+chrome.tabs.onUpdated.emit(1, {url: tabs.get(1).url});
+const navigated = await waitFor(() => {
+  const value = stored.collaborationWorkspace.collaborations[0];
+  return value?.url === tabs.get(1).url && value;
+});
+assert.notEqual(navigated.collaboration_id, prior.collaboration_id);
+assert.equal(navigated.origin, prior.origin);
+
+tabs.get(1).url = "https://other.invalid/synthetic";
+chrome.tabs.onUpdated.emit(1, {url: tabs.get(1).url});
+await waitFor(() => stored.collaborationWorkspace.collaborations.length === 0);
+assert.equal(badges.get(1), "");
 
 process.stdout.write("ok\n");

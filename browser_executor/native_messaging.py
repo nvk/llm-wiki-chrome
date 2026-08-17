@@ -24,6 +24,7 @@ NATIVE_HOST_SCHEMA = "llm-wiki-browser-native-host/v1"
 EXTENSION_ORIGIN_PREFIX = "chrome-extension://"
 MAX_MESSAGE_BYTES = 1_048_576
 COLLABORATION_ID = re.compile(r"^[a-f0-9]{64}$")
+MAX_COLLABORATIONS = 16
 
 
 class NativeMessagingError(RuntimeError):
@@ -213,15 +214,8 @@ def _valid_extension_origin(value: str) -> bool:
     return len(extension_id) == 32 and all(character in "abcdefghijklmnop" for character in extension_id)
 
 
-def _validate_collaboration_update(value: dict[str, Any]) -> dict[str, Any] | None:
-    base = {"protocol", "type", "state"}
-    if value.get("type") != "collaboration" or value.get("state") not in {"active", "inactive"}:
-        raise NativeMessagingError("extension collaboration state is invalid")
-    if value["state"] == "inactive":
-        if set(value) != base:
-            raise NativeMessagingError("inactive collaboration state contains extra fields")
-        return None
-    if set(value) != base | {"collaboration_id", "url", "origin"}:
+def _validate_collaboration(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict) or set(value) != {"collaboration_id", "url", "origin"}:
         raise NativeMessagingError("active collaboration state has an invalid shape")
     collaboration_id = value.get("collaboration_id")
     raw_url = value.get("url")
@@ -250,6 +244,32 @@ def _validate_collaboration_update(value: dict[str, Any]) -> dict[str, Any] | No
     }
 
 
+def _validate_collaboration_update(value: dict[str, Any]) -> dict[str, Any]:
+    if set(value) != {
+        "protocol", "type", "selected_collaboration_id", "collaborations",
+    } or value.get("type") != "collaborations":
+        raise NativeMessagingError("extension collaboration workspace is invalid")
+    raw_collaborations = value.get("collaborations")
+    if not isinstance(raw_collaborations, list) or len(raw_collaborations) > MAX_COLLABORATIONS:
+        raise NativeMessagingError("extension collaboration workspace is invalid")
+    collaborations = [_validate_collaboration(item) for item in raw_collaborations]
+    identifiers = {item["collaboration_id"] for item in collaborations}
+    urls = {item["url"] for item in collaborations}
+    if len(identifiers) != len(collaborations) or len(urls) != len(collaborations):
+        raise NativeMessagingError("extension collaboration workspace contains duplicates")
+    selected = value.get("selected_collaboration_id")
+    if selected is not None and (
+        not isinstance(selected, str)
+        or not COLLABORATION_ID.fullmatch(selected)
+        or selected not in identifiers
+    ):
+        raise NativeMessagingError("extension selected collaboration is invalid")
+    return {
+        "selected_collaboration_id": selected,
+        "collaborations": collaborations,
+    }
+
+
 class NativeRelay:
     """Relay one local targeted-adapter connection to the shared extension."""
 
@@ -262,7 +282,10 @@ class NativeRelay:
         self.agent: socket.socket | None = None
         self.server: socket.socket | None = None
         self.collaboration_lock = threading.Lock()
-        self.collaboration: dict[str, Any] | None = None
+        self.workspace: dict[str, Any] = {
+            "selected_collaboration_id": None,
+            "collaborations": [],
+        }
 
     def _write_extension(self, value: dict[str, Any]) -> None:
         with self.output_lock:
@@ -278,7 +301,11 @@ class NativeRelay:
 
     def _collaboration_status(self) -> dict[str, Any]:
         with self.collaboration_lock:
-            current = dict(self.collaboration) if self.collaboration is not None else None
+            selected = self.workspace["selected_collaboration_id"]
+            current = next((
+                dict(item) for item in self.workspace["collaborations"]
+                if item["collaboration_id"] == selected
+            ), None)
         if current is None:
             return {
                 "protocol": BROWSER_PROTOCOL,
@@ -292,10 +319,22 @@ class NativeRelay:
             **current,
         }
 
-    def _update_collaboration(self, value: dict[str, Any]) -> None:
-        current = _validate_collaboration_update(value)
+    def _collaboration_list(self) -> dict[str, Any]:
         with self.collaboration_lock:
-            self.collaboration = current
+            workspace = {
+                "selected_collaboration_id": self.workspace["selected_collaboration_id"],
+                "collaborations": [dict(item) for item in self.workspace["collaborations"]],
+            }
+        return {
+            "protocol": BROWSER_PROTOCOL,
+            "type": "collaboration-list",
+            **workspace,
+        }
+
+    def _update_collaboration(self, value: dict[str, Any]) -> None:
+        workspace = _validate_collaboration_update(value)
+        with self.collaboration_lock:
+            self.workspace = workspace
 
     def _handle_agent(self, connection: socket.socket) -> None:
         with self.agent_lock:
@@ -332,6 +371,16 @@ class NativeRelay:
                             raise NativeMessagingError("collaboration query has an invalid shape")
                         payload = json.dumps(
                             self._collaboration_status(),
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                        connection.sendall(payload + b"\n")
+                        return
+                    if job_id is None and message_type == "collaboration-list-query":
+                        if set(value) != {"protocol", "type"}:
+                            raise NativeMessagingError("collaboration list query has an invalid shape")
+                        payload = json.dumps(
+                            self._collaboration_list(),
                             sort_keys=True,
                             separators=(",", ":"),
                         ).encode("utf-8")
@@ -399,7 +448,7 @@ class NativeRelay:
                         "error": "extension protocol does not match native host",
                     })
                     continue
-                if value.get("type") == "collaboration":
+                if value.get("type") == "collaborations":
                     try:
                         self._update_collaboration(value)
                     except NativeMessagingError:

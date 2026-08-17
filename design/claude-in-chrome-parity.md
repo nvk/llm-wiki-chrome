@@ -34,7 +34,7 @@ browser planner into this repository.
 | Screenshots / visual context | Bounded private viewport JPEG, no automatic model upload | Implemented in source; consumer parity pending |
 | Scroll long pages and virtualized lists | Bounded typed scroll plus deduplicating AX collection on the exact tab | Implemented in source; X provider adoption pending |
 | Browser log entries | Paired, bounded exact-tab CDP Log window with private-only scalar results | Implemented in source; live-browser gate pending |
-| Multiple tabs | Explicit job-owned tabs/group only, never ambient tabs | Later typed protocol version |
+| Multiple tabs | Up to 16 individually clicked active-tab grants; each job remains exact-target | Implemented in source; live-browser gate pending |
 | Request debugging | Paired exact-tab request metadata capture without queries, headers, bodies, cookies, IDs, or interception | Implemented in source; live-browser gate pending |
 | Console API debugging | Paired exact-tab `Runtime.consoleAPICalled` capture with bounded scalar-only arguments and no evaluation or object dereferencing | Implemented in source; live-browser gate pending |
 | Downloads and uploads | Registered file roots, typed operations, provider verification | Later explicit effect capability |
@@ -48,7 +48,9 @@ browser planner into this repository.
 
 ## Current implementation slice
 
-The first parity slice implements exact-tab activation, same-origin/path
+The current parity slice implements a bounded explicit multi-tab workspace,
+private exact-URL discovery, per-tab and whole-workspace revocation, content-free
+job progress and cancellation, exact-tab activation, same-origin/path
 enforcement, typed DOM/AX queries, bounded waits and branches, private
 extraction, clicks, focus, key chords, private text insertion, and the governed
 mutation challenge. It retains the existing two reviewed production origins.

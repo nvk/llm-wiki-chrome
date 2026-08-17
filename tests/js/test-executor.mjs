@@ -51,26 +51,16 @@ class FakeChrome {
   constructor(targetUrl, mode = "read") {
     this.targetUrl = targetUrl;
     this.mode = mode;
-    this.nextTabId = 1;
-    this.tab = null;
+    this.tab = {id: 1, windowId: 1, url: targetUrl, active: true, status: "complete"};
     this.window = {id: 1, focused: false};
     this.attached = false;
     this.focusedBackend = null;
     this.insertedText = "";
     this.commands = [];
-    this.queries = [];
     this.clicks = 0;
     this.scrolls = 0;
 
     this.tabs = {
-      query: async (query) => {
-        this.queries.push(structuredClone(query));
-        return this.tab ? [structuredClone(this.tab)] : [];
-      },
-      create: async ({url, active}) => {
-        this.tab = {id: this.nextTabId++, windowId: 1, url, active, status: "complete"};
-        return structuredClone(this.tab);
-      },
       update: async (tabId, changes) => {
         assert.equal(tabId, this.tab.id);
         Object.assign(this.tab, changes);
@@ -309,6 +299,15 @@ async function mutationProgram() {
   return validateProgram(program);
 }
 
+async function sha256Hex(value) {
+  const canonical = value.map((row) => Object.fromEntries(
+    Object.keys(row).sort().map((key) => [key, row[key]]),
+  ));
+  const bytes = new TextEncoder().encode(JSON.stringify(canonical));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 async function screenshotProgram() {
   const program = {
     protocol: "llm-wiki-browser-executor/v1",
@@ -545,14 +544,23 @@ async function consoleCaptureProgram() {
 async function testReadExecutionAndPrivateExtraction() {
   const program = await validateProgram(loadFixture("x-space-read-v1.json"));
   const fake = new FakeChrome(program.target.url, "read");
-  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac", targetTabId: fake.tab.id});
   const result = await executor.run(program, {}, async () => false);
   assert.deepEqual(Object.keys(result.private).sort(), ["space.attendees", "space.metadata"]);
   assert.equal(result.private["space.attendees"].length, 2);
   assert.equal(result.public.private_result_count, 2);
-  assert.equal(fake.queries.length, 1);
-  assert.deepEqual(fake.queries[0], {url: ["https://x.com/*"]});
   assert.equal(fake.commands.some(({method}) => method === "Runtime.evaluate"), false);
+  assert.equal(fake.attached, false);
+}
+
+async function testExecutionRequiresAnExplicitSharedTabId() {
+  const program = await validateProgram(loadFixture("x-space-read-v1.json"));
+  const fake = new FakeChrome(program.target.url, "read");
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  await assert.rejects(
+    executor.run(program, {}, async () => false),
+    (error) => error instanceof ExecutionError && error.code === "collaboration-target-missing",
+  );
   assert.equal(fake.attached, false);
 }
 
@@ -560,7 +568,7 @@ async function testMutationBoundaryAndPrivateInsertion() {
   const program = await mutationProgram();
   const fake = new FakeChrome(program.target.url, "mutation");
   let authorizations = 0;
-  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac", targetTabId: fake.tab.id});
   const result = await executor.run(program, {"edit.value": "Synthetic replacement"}, async () => {
     authorizations += 1;
     return true;
@@ -575,7 +583,7 @@ async function testMutationBoundaryAndPrivateInsertion() {
 async function testPrivateViewportCapture() {
   const program = await screenshotProgram();
   const fake = new FakeChrome(program.target.url, "read");
-  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac", targetTabId: fake.tab.id});
   const result = await executor.run(program, {}, async () => false);
   assert.equal(result.public.private_result_count, 1);
   assert.deepEqual(result.private["page.viewport"], {
@@ -588,7 +596,7 @@ async function testPrivateViewportCapture() {
 async function testViewportScrollAndPrivateLinkMetadata() {
   const program = await scrollAndLinkProgram();
   const fake = new FakeChrome(program.target.url, "read");
-  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac", targetTabId: fake.tab.id});
   const result = await executor.run(program, {}, async () => false);
   const wheel = fake.commands.find(({method, parameters}) =>
     method === "Input.dispatchMouseEvent" && parameters.type === "mouseWheel");
@@ -605,7 +613,7 @@ async function testViewportScrollAndPrivateLinkMetadata() {
 async function testScrollingCollectionDeduplicatesAndStopsAtBound() {
   const program = await scrollingCollectionProgram();
   const fake = new FakeChrome(program.target.url, "read");
-  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac", targetTabId: fake.tab.id});
   const result = await executor.run(program, {}, async () => false);
   assert.equal(fake.scrolls, 1);
   const wheel = fake.commands.find(({method, parameters}) =>
@@ -623,7 +631,7 @@ async function testScrollingCollectionDeduplicatesAndStopsAtBound() {
 async function testPrivateBrowserLogCaptureIsBoundedAndCleanedUp() {
   const program = await browserLogProgram();
   const fake = new FakeChrome(program.target.url, "read");
-  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac", targetTabId: fake.tab.id});
   const result = await executor.run(program, {}, async () => false);
   assert.deepEqual(result.private["page.browser_log"], {
     entries: [{
@@ -643,7 +651,7 @@ async function testPrivateBrowserLogCaptureIsBoundedAndCleanedUp() {
 async function testPrivateRequestCaptureDropsSensitivePayloadsAndCleansUp() {
   const program = await requestCaptureProgram();
   const fake = new FakeChrome(program.target.url, "read");
-  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac", targetTabId: fake.tab.id});
   const result = await executor.run(program, {}, async () => false);
   assert.deepEqual(result.private["page.requests"], {
     entries: [
@@ -695,7 +703,7 @@ async function testInvalidPrivateRequestFailsClosedAndCleansUp() {
     }
     return original(method, parameters);
   };
-  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac", targetTabId: fake.tab.id});
   await assert.rejects(
     executor.run(program, {}, async () => false),
     (error) => error instanceof ExecutionError && error.code === "private-request-invalid",
@@ -707,7 +715,7 @@ async function testInvalidPrivateRequestFailsClosedAndCleansUp() {
 async function testPrivateConsoleCaptureKeepsOnlyBoundedScalarsAndCleansUp() {
   const program = await consoleCaptureProgram();
   const fake = new FakeChrome(program.target.url, "read");
-  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac", targetTabId: fake.tab.id});
   const result = await executor.run(program, {}, async () => false);
   assert.deepEqual(result.private["page.console"], {
     entries: [{
@@ -747,7 +755,7 @@ async function testInvalidPrivateConsoleEventFailsClosedAndCleansUp() {
     }
     return original(method, parameters);
   };
-  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac", targetTabId: fake.tab.id});
   await assert.rejects(
     executor.run(program, {}, async () => false),
     (error) => error instanceof ExecutionError && error.code === "private-console-invalid",
@@ -759,13 +767,54 @@ async function testInvalidPrivateConsoleEventFailsClosedAndCleansUp() {
 async function testMutationDenialFailsClosed() {
   const program = await mutationProgram();
   const fake = new FakeChrome(program.target.url, "mutation");
-  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac", targetTabId: fake.tab.id});
   await assert.rejects(
     executor.run(program, {"edit.value": "Synthetic replacement"}, async () => false),
     (error) => error instanceof ExecutionError && error.code === "mutation-denied",
   );
   assert.equal(fake.clicks, 0);
   assert.equal(fake.attached, false);
+}
+
+async function testPrivateAXSnapshotHashLocksMutationBaseline() {
+  const program = await mutationProgram();
+  program.private_slots.push("baseline.sha256");
+  program.actions.splice(2, 0, {
+    op: "assert_ax_private_sha256",
+    slot: "baseline.sha256",
+    locator: {name_matches: ".+"},
+    fields: ["role", "name"],
+    max_items: 100,
+  });
+  program.limits.max_actions += 1;
+  program.program_sha256 = await canonicalProgramHash(program);
+  validateProgram(program);
+  const expected = await sha256Hex([
+    {role: "document", name: "Synthetic document"},
+    {role: "dialog", name: "Synthetic editor"},
+    {role: "textbox", name: "Synthetic field"},
+    {role: "button", name: "Replace"},
+  ]);
+
+  const accepted = new FakeChrome(program.target.url, "mutation");
+  const acceptedExecutor = new BrowserExecutor({chromeApi: accepted, platform: "mac", targetTabId: accepted.tab.id});
+  const result = await acceptedExecutor.run(program, {
+    "edit.value": "Synthetic replacement",
+    "baseline.sha256": expected,
+  }, async () => true);
+  assert.equal(result.public.mutation_started, true);
+  assert.equal(accepted.clicks, 1);
+
+  const rejected = new FakeChrome(program.target.url, "mutation");
+  const rejectedExecutor = new BrowserExecutor({chromeApi: rejected, platform: "mac", targetTabId: rejected.tab.id});
+  await assert.rejects(
+    rejectedExecutor.run(program, {
+      "edit.value": "Synthetic replacement",
+      "baseline.sha256": "0".repeat(64),
+    }, async () => true),
+    (error) => error instanceof ExecutionError && error.code === "private-snapshot-mismatch",
+  );
+  assert.equal(rejected.clicks, 0);
 }
 
 async function testTargetDriftIsNotRetried() {
@@ -777,7 +826,7 @@ async function testTargetDriftIsNotRetried() {
     if (method === "Page.enable") fake.tab.active = false;
     return result;
   };
-  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac", targetTabId: fake.tab.id});
   await assert.rejects(
     executor.run(program, {"edit.value": "Synthetic replacement"}, async () => true),
     (error) => error instanceof ExecutionError && error.code === "target-focus-drift",
@@ -794,6 +843,7 @@ async function testCancellationFailsClosed() {
     chromeApi: fake,
     platform: "mac",
     isCancelled: () => ++checks > 3,
+    targetTabId: fake.tab.id,
   });
   await assert.rejects(
     executor.run(program, {"edit.value": "Synthetic replacement"}, async () => true),
@@ -804,6 +854,7 @@ async function testCancellationFailsClosed() {
 }
 
 await testReadExecutionAndPrivateExtraction();
+await testExecutionRequiresAnExplicitSharedTabId();
 await testMutationBoundaryAndPrivateInsertion();
 await testPrivateViewportCapture();
 await testViewportScrollAndPrivateLinkMetadata();
@@ -814,6 +865,7 @@ await testInvalidPrivateRequestFailsClosedAndCleansUp();
 await testPrivateConsoleCaptureKeepsOnlyBoundedScalarsAndCleansUp();
 await testInvalidPrivateConsoleEventFailsClosedAndCleansUp();
 await testMutationDenialFailsClosed();
+await testPrivateAXSnapshotHashLocksMutationBaseline();
 await testTargetDriftIsNotRetried();
 await testCancellationFailsClosed();
 process.stdout.write("ok\n");

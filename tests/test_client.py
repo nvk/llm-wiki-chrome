@@ -33,7 +33,7 @@ def send_line(connection: socket.socket, value: dict) -> None:
 
 
 class ClientTests(unittest.TestCase):
-    def collaboration_server(self, response: dict):
+    def collaboration_server(self, response: dict, operation: Callable[[BrowserExecutorClient], object] | None = None):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "executor.sock"
             server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -49,7 +49,7 @@ class ClientTests(unittest.TestCase):
                         request = receive_line(connection)
                         self.assertEqual(request, {
                             "protocol": BROWSER_PROTOCOL,
-                            "type": "collaboration-query",
+                            "type": "collaboration-list-query",
                         })
                         send_line(connection, response)
                 except BaseException as exc:
@@ -60,7 +60,8 @@ class ClientTests(unittest.TestCase):
             thread = threading.Thread(target=serve, daemon=True)
             thread.start()
             try:
-                result = BrowserExecutorClient(path, timeout_seconds=10).current_collaboration()
+                client = BrowserExecutorClient(path, timeout_seconds=10)
+                result = (operation or (lambda value: value.current_collaboration()))(client)
             finally:
                 thread.join(timeout=2)
             if failure:
@@ -124,11 +125,13 @@ class ClientTests(unittest.TestCase):
     def test_current_collaboration_returns_only_the_exact_private_target(self) -> None:
         result = self.collaboration_server({
             "protocol": BROWSER_PROTOCOL,
-            "type": "collaboration-status",
-            "state": "active",
-            "collaboration_id": "d" * 64,
-            "url": "https://example.invalid/private?synthetic=1",
-            "origin": "https://example.invalid",
+            "type": "collaboration-list",
+            "selected_collaboration_id": "d" * 64,
+            "collaborations": [{
+                "collaboration_id": "d" * 64,
+                "url": "https://example.invalid/private?synthetic=1",
+                "origin": "https://example.invalid",
+            }],
         })
         self.assertEqual(result, {
             "collaboration_id": "d" * 64,
@@ -139,9 +142,40 @@ class ClientTests(unittest.TestCase):
     def test_current_collaboration_can_be_inactive(self) -> None:
         self.assertIsNone(self.collaboration_server({
             "protocol": BROWSER_PROTOCOL,
-            "type": "collaboration-status",
-            "state": "inactive",
+            "type": "collaboration-list",
+            "selected_collaboration_id": None,
+            "collaborations": [],
         }))
+
+    def test_multiple_collaborations_are_explicit_and_matchable_by_exact_url(self) -> None:
+        first = {
+            "collaboration_id": "a" * 64,
+            "url": "https://one.invalid/private",
+            "origin": "https://one.invalid",
+        }
+        second = {
+            "collaboration_id": "b" * 64,
+            "url": "https://two.invalid/private",
+            "origin": "https://two.invalid",
+        }
+        response = {
+            "protocol": BROWSER_PROTOCOL,
+            "type": "collaboration-list",
+            "selected_collaboration_id": second["collaboration_id"],
+            "collaborations": [first, second],
+        }
+        collaborations = self.collaboration_server(response, lambda client: client.collaborations())
+        self.assertEqual(collaborations, [second, first])
+        matched = self.collaboration_server(
+            response,
+            lambda client: client.collaboration_for_url(first["url"]),
+        )
+        self.assertEqual(matched, first)
+
+    def test_collaboration_match_rejects_non_https_target_before_connect(self) -> None:
+        client = BrowserExecutorClient(Path("/tmp/absent-executor.sock"))
+        with self.assertRaisesRegex(ClientError, "URL is invalid"):
+            client.collaboration_for_url("http://example.invalid/private")
 
     def test_mutation_requires_and_crosses_one_callback_boundary(self) -> None:
         program = fixture("google-docs-suggestions-v1.json")

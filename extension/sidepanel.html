@@ -24,13 +24,28 @@
       <section class="status collaboration" aria-live="polite">
         <span id="collaboration-indicator" class="indicator"></span>
         <div>
-          <strong id="collaboration-state">No tab is exposed</strong>
-          <p id="collaboration-detail">Open a page and click the extension to collaborate.</p>
+          <strong id="collaboration-state">No tabs are exposed</strong>
+          <p id="collaboration-detail">Open an HTTPS page and click the extension to collaborate.</p>
         </div>
       </section>
-      <button id="stop" type="button" hidden>Stop collaboration</button>
+      <section id="workspace" class="workspace" aria-label="Shared tabs" hidden>
+        <div class="section-heading">
+          <h2>Shared tabs</h2>
+          <button id="stop-all" class="text-button" type="button">Stop all</button>
+        </div>
+        <ul id="collaborations"></ul>
+      </section>
+      <section id="job" class="job" aria-live="polite" hidden>
+        <div class="section-heading">
+          <h2>Current job</h2>
+          <span id="job-state" class="pill">Running</span>
+        </div>
+        <progress id="job-progress" max="1" value="0"></progress>
+        <p id="job-detail" class="muted"></p>
+        <button id="cancel-job" type="button">Cancel job</button>
+      </section>
       <p class="note">
-        The grant ends when the tab navigates away, closes, or you stop it.
+        Each grant ends when its tab leaves the shared origin, closes, or you stop it.
         Proposed changes still require a governed plan and read-back verification.
       </p>
     </main>

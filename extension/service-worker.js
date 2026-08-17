@@ -7,7 +7,9 @@ import {BrowserExecutor, ExecutionError} from "./executor.mjs";
 
 const NATIVE_HOST = "net.llmwiki.browser_execution";
 const CONNECTOR_STATE_KEY = "nativeConnectorState";
-const COLLABORATION_STATE_KEY = "activeCollaboration";
+const COLLABORATION_STATE_KEY = "collaborationWorkspace";
+const JOB_STATE_KEY = "activeJobState";
+const MAX_COLLABORATIONS = 16;
 const JOB_ID = /^[a-f0-9]{36}$/u;
 const COLLABORATION_ID = /^[a-f0-9]{64}$/u;
 const ERROR_CODE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
@@ -15,6 +17,7 @@ const ERROR_CODE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
 let nativePort = null;
 let reconnectTimer = null;
 let activeJob = null;
+let workspaceSerial = Promise.resolve();
 
 function hasExactKeys(value, expected) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -27,6 +30,10 @@ async function setConnectorState(state, detail = "") {
   await chrome.storage.session.set({
     [CONNECTOR_STATE_KEY]: {state, detail: String(detail || "").slice(0, 240)},
   });
+}
+
+async function setJobState(value) {
+  await chrome.storage.session.set({[JOB_STATE_KEY]: value});
 }
 
 function collaborationId() {
@@ -51,82 +58,172 @@ function validateCollaboration(value) {
   return value;
 }
 
-async function publishCollaboration(value) {
-  if (!nativePort) return;
-  if (!value) {
-    sendThrough(nativePort, {type: "collaboration", state: "inactive"});
-    return;
+function emptyWorkspace() {
+  return {selected_collaboration_id: null, collaborations: []};
+}
+
+function validateWorkspace(value) {
+  if (!hasExactKeys(value, ["selected_collaboration_id", "collaborations"]) ||
+      !Array.isArray(value.collaborations) || value.collaborations.length > MAX_COLLABORATIONS) {
+    return null;
   }
+  const collaborations = value.collaborations.map(validateCollaboration);
+  if (collaborations.some((item) => !item)) return null;
+  const identifiers = new Set(collaborations.map((item) => item.collaboration_id));
+  const tabs = new Set(collaborations.map((item) => item.tab_id));
+  const urls = new Set(collaborations.map((item) => item.url));
+  if (identifiers.size !== collaborations.length || tabs.size !== collaborations.length ||
+      urls.size !== collaborations.length) return null;
+  const selected = value.selected_collaboration_id;
+  if (selected !== null && (!COLLABORATION_ID.test(selected) || !identifiers.has(selected))) return null;
+  return {selected_collaboration_id: selected, collaborations};
+}
+
+function withWorkspaceMutation(operation) {
+  const pending = workspaceSerial.then(operation, operation);
+  workspaceSerial = pending.catch(() => {});
+  return pending;
+}
+
+function targetFromTab(tab) {
+  if (!Number.isInteger(tab?.id) || !Number.isInteger(tab?.windowId) ||
+      typeof tab?.url !== "string" || tab.url.length > 16384) return null;
+  try {
+    const url = new URL(tab.url);
+    if (url.protocol !== "https:" || url.username || url.password) return null;
+    return {url: tab.url, origin: url.origin};
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function publishWorkspace(workspace) {
+  if (!nativePort) return;
   sendThrough(nativePort, {
-    type: "collaboration",
-    state: "active",
-    collaboration_id: value.collaboration_id,
-    url: value.url,
-    origin: value.origin,
+    type: "collaborations",
+    selected_collaboration_id: workspace.selected_collaboration_id,
+    collaborations: workspace.collaborations.map((value) => ({
+      collaboration_id: value.collaboration_id,
+      url: value.url,
+      origin: value.origin,
+    })),
   });
 }
 
-async function revokeCollaboration() {
-  const stored = await chrome.storage.session.get(COLLABORATION_STATE_KEY);
-  const prior = validateCollaboration(stored[COLLABORATION_STATE_KEY]);
-  await chrome.storage.session.set({[COLLABORATION_STATE_KEY]: null});
-  if (prior) await chrome.action.setBadgeText({tabId: prior.tab_id, text: ""}).catch(() => {});
-  await publishCollaboration(null).catch(() => {});
+async function persistWorkspace(workspace, removed = []) {
+  await chrome.storage.session.set({[COLLABORATION_STATE_KEY]: workspace});
+  for (const value of removed) {
+    await chrome.action.setBadgeText({tabId: value.tab_id, text: ""}).catch(() => {});
+  }
+  for (const value of workspace.collaborations) {
+    await chrome.action.setBadgeBackgroundColor({tabId: value.tab_id, color: "#317258"}).catch(() => {});
+    await chrome.action.setBadgeText({tabId: value.tab_id, text: "ON"}).catch(() => {});
+  }
+  await publishWorkspace(workspace).catch(() => {});
 }
 
-async function currentCollaboration() {
+async function checkedWorkspaceUnlocked() {
   const stored = await chrome.storage.session.get(COLLABORATION_STATE_KEY);
-  const value = validateCollaboration(stored[COLLABORATION_STATE_KEY]);
-  if (!value) return null;
-  try {
-    const tab = await chrome.tabs.get(value.tab_id);
-    if (tab.windowId !== value.window_id || tab.url !== value.url) {
-      await revokeCollaboration();
-      return null;
+  const original = validateWorkspace(stored[COLLABORATION_STATE_KEY]);
+  const workspace = original || emptyWorkspace();
+  const collaborations = [];
+  const removed = [];
+  for (const value of workspace.collaborations) {
+    try {
+      const tab = await chrome.tabs.get(value.tab_id);
+      const target = targetFromTab(tab);
+      if (!target || tab.windowId !== value.window_id || target.origin !== value.origin) {
+        removed.push(value);
+        continue;
+      }
+      if (target.url === value.url) {
+        collaborations.push(value);
+      } else {
+        collaborations.push({...value, collaboration_id: collaborationId(), url: target.url});
+      }
+    } catch (_error) {
+      removed.push(value);
     }
-  } catch (_error) {
-    await revokeCollaboration();
-    return null;
   }
-  return value;
+  const identifiers = new Set(collaborations.map((value) => value.collaboration_id));
+  let selected = workspace.selected_collaboration_id;
+  if (!identifiers.has(selected)) selected = collaborations.at(-1)?.collaboration_id || null;
+  const checked = {selected_collaboration_id: selected, collaborations};
+  if (!original || removed.length || JSON.stringify(checked) !== JSON.stringify(original)) {
+    await persistWorkspace(checked, removed);
+  }
+  return checked;
+}
+
+function checkedWorkspace() {
+  return withWorkspaceMutation(checkedWorkspaceUnlocked);
+}
+
+async function revokeCollaboration(collaborationId = null, revokeAll = false) {
+  return withWorkspaceMutation(async () => {
+    const workspace = await checkedWorkspaceUnlocked();
+    const targetId = collaborationId || workspace.selected_collaboration_id;
+    const removed = revokeAll
+      ? workspace.collaborations
+      : workspace.collaborations.filter((value) => value.collaboration_id === targetId);
+    const removedIds = new Set(removed.map((value) => value.collaboration_id));
+    const collaborations = workspace.collaborations.filter(
+      (value) => !removedIds.has(value.collaboration_id),
+    );
+    const selected = removedIds.has(workspace.selected_collaboration_id)
+      ? collaborations.at(-1)?.collaboration_id || null
+      : workspace.selected_collaboration_id;
+    const next = {selected_collaboration_id: selected, collaborations};
+    await persistWorkspace(next, removed);
+    return removed.length > 0;
+  });
 }
 
 async function startCollaboration(tab) {
   const panel = Number.isInteger(tab?.id) ? chrome.sidePanel.open({tabId: tab.id}) : Promise.resolve();
-  let url;
-  try {
-    url = new URL(tab?.url || "");
-  } catch (_error) {
-    await revokeCollaboration();
+  const target = targetFromTab(tab);
+  if (!target) {
     await panel.catch(() => {});
     return;
   }
-  if (!Number.isInteger(tab.id) || !Number.isInteger(tab.windowId) || url.protocol !== "https:" ||
-      url.username || url.password || tab.url.length > 16384) {
-    await revokeCollaboration();
-    await panel.catch(() => {});
-    return;
-  }
-  const prior = await currentCollaboration();
-  if (prior && prior.tab_id !== tab.id) {
-    await chrome.action.setBadgeText({tabId: prior.tab_id, text: ""}).catch(() => {});
-  }
-  const value = {
-    collaboration_id: collaborationId(),
-    tab_id: tab.id,
-    window_id: tab.windowId,
-    url: tab.url,
-    origin: url.origin,
-  };
-  await chrome.storage.session.set({[COLLABORATION_STATE_KEY]: value});
-  await chrome.action.setBadgeBackgroundColor({tabId: tab.id, color: "#317258"});
-  await chrome.action.setBadgeText({tabId: tab.id, text: "ON"});
-  await publishCollaboration(value).catch(() => {});
+  await withWorkspaceMutation(async () => {
+    const workspace = await checkedWorkspaceUnlocked();
+    const existing = workspace.collaborations.find(
+      (value) => value.tab_id === tab.id && value.url === target.url,
+    );
+    if (existing) {
+      workspace.selected_collaboration_id = existing.collaboration_id;
+      await persistWorkspace(workspace);
+      return;
+    }
+    const removed = workspace.collaborations.filter(
+      (value) => value.tab_id === tab.id || value.url === target.url,
+    );
+    let collaborations = workspace.collaborations.filter(
+      (value) => value.tab_id !== tab.id && value.url !== target.url,
+    );
+    if (collaborations.length >= MAX_COLLABORATIONS) removed.push(collaborations.shift());
+    const value = {
+      collaboration_id: collaborationId(),
+      tab_id: tab.id,
+      window_id: tab.windowId,
+      url: target.url,
+      origin: target.origin,
+    };
+    collaborations.push(value);
+    await persistWorkspace({
+      selected_collaboration_id: value.collaboration_id,
+      collaborations,
+    }, removed.filter(Boolean));
+  });
   await panel.catch(() => {});
 }
 
 async function collaborationForProgram(program) {
-  const value = await currentCollaboration();
+  const workspace = await checkedWorkspace();
+  const value = workspace.collaborations.find(
+    (candidate) => candidate.collaboration_id === program.target.collaboration_id,
+  );
   if (!value || value.collaboration_id !== program.target.collaboration_id ||
       value.url !== program.target.url || value.origin !== program.target.origin) return null;
   return value;
@@ -147,10 +244,17 @@ function finishBoundary(job, authorized) {
   return true;
 }
 
-function cancelActiveJob(port) {
-  if (!activeJob || activeJob.port !== port) return;
+function cancelActiveJob(port = null) {
+  if (!activeJob || (port && activeJob.port !== port)) return false;
   activeJob.cancelled = true;
   finishBoundary(activeJob, false);
+  setJobState({
+    state: "cancelling",
+    action_count: activeJob.executor?.actionCount || 0,
+    max_actions: activeJob.executor?.program?.limits?.max_actions || 0,
+    mutation_started: activeJob.executor?.mutationStarted === true,
+  }).catch(() => {});
+  return true;
 }
 
 function scheduleReconnect() {
@@ -210,6 +314,12 @@ function requestMutation(job) {
   if (job.cancelled || job.boundary) return Promise.resolve(false);
   setConnectorState("authorizing", "The targeted adapter is authorizing one mutation boundary.")
     .catch(() => {});
+  setJobState({
+    state: "authorizing",
+    action_count: job.executor?.actionCount || 0,
+    max_actions: job.executor?.program?.limits?.max_actions || 0,
+    mutation_started: false,
+  }).catch(() => {});
   const remaining = Math.max(1, job.executor.deadline - Date.now());
   return new Promise((resolve) => {
     const boundary = {resolve, settled: false, timer: null};
@@ -232,6 +342,12 @@ function handleMutationAuthorization(message, port) {
     return;
   }
   setConnectorState("busy", "A bounded browser job is running.").catch(() => {});
+  setJobState({
+    state: "running",
+    action_count: job.executor?.actionCount || 0,
+    max_actions: job.executor?.program?.limits?.max_actions || 0,
+    mutation_started: job.executor?.mutationStarted === true,
+  }).catch(() => {});
   finishBoundary(job, message.authorized);
 }
 
@@ -285,16 +401,32 @@ async function executeJob(message, port) {
     boundary: null,
     cancelled: false,
     executor: null,
+    collaborationId: collaboration.collaboration_id,
+    tabId: collaboration.tab_id,
   };
   const executor = new BrowserExecutor({
     chromeApi: chrome,
     platform: platformInfo.os,
     isCancelled: () => job.cancelled,
+    onProgress: ({actionCount, maxActions, mutationStarted}) => {
+      setJobState({
+        state: job.boundary ? "authorizing" : "running",
+        action_count: actionCount,
+        max_actions: maxActions,
+        mutation_started: mutationStarted,
+      }).catch(() => {});
+    },
     targetTabId: collaboration.tab_id,
   });
   job.executor = executor;
   activeJob = job;
   await setConnectorState("busy", "A bounded browser job is running.").catch(() => {});
+  await setJobState({
+    state: "running",
+    action_count: 0,
+    max_actions: program.limits.max_actions,
+    mutation_started: false,
+  }).catch(() => {});
 
   try {
     const result = await executor.run(
@@ -326,6 +458,7 @@ async function executeJob(message, port) {
   } finally {
     finishBoundary(job, false);
     if (activeJob === job) activeJob = null;
+    await setJobState(null).catch(() => {});
     if (nativePort === port) {
       await setConnectorState("connected", "Ready for an exact-target job.").catch(() => {});
     }
@@ -342,7 +475,7 @@ async function handleNativeMessage(message, port) {
       throw new Error("invalid-ready-message");
     }
     await setConnectorState("connected");
-    await publishCollaboration(await currentCollaboration()).catch(() => {});
+    await publishWorkspace(await checkedWorkspace()).catch(() => {});
     return;
   }
   if (message.type === "mutation-authorized") {
@@ -358,7 +491,8 @@ async function handleNativeMessage(message, port) {
 
 async function configureExtension() {
   connectNativeBridge();
-  await publishCollaboration(await currentCollaboration()).catch(() => {});
+  await setJobState(null).catch(() => {});
+  await publishWorkspace(await checkedWorkspace()).catch(() => {});
 }
 
 chrome.runtime.onInstalled.addListener(configureExtension);
@@ -373,37 +507,53 @@ chrome.action.onClicked.addListener((tab) => {
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (typeof changeInfo.url !== "string") return;
-  currentCollaboration().then((value) => {
-    if (value && value.tab_id === tabId && value.url !== changeInfo.url) {
-      return revokeCollaboration();
-    }
-    return undefined;
-  }).catch(() => {});
+  if (activeJob?.tabId === tabId) cancelActiveJob();
+  checkedWorkspace().catch(() => {});
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  currentCollaboration().then((value) => {
-    if (value && value.tab_id === tabId) return revokeCollaboration();
-    return undefined;
-  }).catch(() => {});
+  if (activeJob?.tabId === tabId) cancelActiveJob();
+  checkedWorkspace().catch(() => {});
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "stop-collaboration") {
-    revokeCollaboration().then(() => sendResponse({stopped: true})).catch(() => {
+    revokeCollaboration().then((stopped) => sendResponse({stopped})).catch(() => {
       sendResponse({stopped: false});
     });
     return true;
+  }
+  if (message?.type === "revoke-collaboration" && COLLABORATION_ID.test(message.collaboration_id || "")) {
+    revokeCollaboration(message.collaboration_id).then((stopped) => sendResponse({stopped})).catch(() => {
+      sendResponse({stopped: false});
+    });
+    return true;
+  }
+  if (message?.type === "stop-all-collaborations") {
+    revokeCollaboration(null, true).then((stopped) => sendResponse({stopped})).catch(() => {
+      sendResponse({stopped: false});
+    });
+    return true;
+  }
+  if (message?.type === "cancel-job") {
+    sendResponse({cancelled: cancelActiveJob()});
+    return false;
   }
   if (!message || message.type !== "get-status") return false;
   if (!nativePort) connectNativeBridge();
   Promise.all([
     chrome.storage.session.get(CONNECTOR_STATE_KEY),
-    currentCollaboration(),
-  ]).then(([stored, collaboration]) => {
+    chrome.storage.session.get(JOB_STATE_KEY),
+    checkedWorkspace(),
+  ]).then(([stored, jobStored, workspace]) => {
     sendResponse({
       connector: stored[CONNECTOR_STATE_KEY] || {state: "offline", detail: "Connector starting."},
-      collaboration: {state: collaboration ? "active" : "inactive"},
+      collaborations: workspace.collaborations.map((value) => ({
+        collaboration_id: value.collaboration_id,
+        origin: value.origin,
+        selected: value.collaboration_id === workspace.selected_collaboration_id,
+      })),
+      job: jobStored[JOB_STATE_KEY] || null,
     });
   });
   return true;

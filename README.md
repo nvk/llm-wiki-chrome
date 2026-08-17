@@ -15,12 +15,16 @@ read-back verification.
 The extension does not need persistent site access or per-page Chrome host
 registration. The user opens an HTTPS page and clicks the extension action.
 That Chrome user gesture creates a fresh ephemeral collaboration grant bound to
-the exact tab, URL, and origin. The grant is revoked when the tab navigates,
-closes, or the user chooses **Stop collaboration**.
+the exact tab, URL, and origin. Clicking additional tabs builds an explicit
+workspace of up to 16 grants; the executor never enumerates unrelated tabs.
+Same-origin navigation rotates the exact grant ID and URL so stale programs
+fail closed. A grant is revoked when the tab leaves its origin, closes, or the
+user stops that tab or the whole workspace in the side panel.
 
-Targeted adapters retrieve the active grant through the private native socket,
-compile it into an exact typed program, and fail closed if the grant or page has
-changed. The click authorizes exposing that page to bounded adapter reads; it
+Targeted adapters retrieve the private workspace through the native socket,
+match an expected URL or provider identifier, compile that one grant into an
+exact typed program, and fail closed if the grant or page has changed. The
+click authorizes exposing that page to bounded adapter reads; it
 does not authorize an arbitrary write. Mutation jobs still require the exact
 approved plan hash, the one-shot pre-mutation boundary, provider-specific
 preconditions, and independent read-back verification.
@@ -30,13 +34,19 @@ grant replaces per-resource registration and provider OAuth only for workflows
 that can inspect and verify through the browser UI. A targeted adapter may keep
 a first-party API as an optional stronger verification path.
 
+Mutation programs may bind a provider-owned revision fingerprint with
+`assert_ax_private_sha256`. The executor recomputes the bounded accessibility
+projection on the exact exposed tab immediately before the governed mutation
+boundary and fails closed on drift. The expected hash remains a private value;
+neither it nor the projected page content is shown in the side panel.
+
 Provider adapters use the private client directly:
 
 ```python
 from browser_executor.client import BrowserExecutorClient
 
 executor = BrowserExecutorClient()
-collaboration = executor.current_collaboration()
+collaboration = executor.collaboration_for_url(expected_url)
 if collaboration is None:
     raise RuntimeError("click the extension on the target page")
 
@@ -53,6 +63,8 @@ bounded execution slice:
 - cross-language policy-decision tests for the Python client and MV3 validator;
 - exact HTTPS target and bounded action declarations;
 - click-created active-tab grants with no persistent host permissions;
+- a bounded multi-tab collaboration workspace with private exact-URL lookup;
+- a content-free side-panel workspace, progress meter, per-tab revocation, and cancellation;
 - separate read and mutation capabilities;
 - one governed mutation callback in the Python client;
 - stable extension identity and exact native-host origin;
@@ -69,7 +81,8 @@ bounded execution slice:
   never evaluates or dereferences remote objects;
 - typed click, focus, key-chord, and private text-insertion actions;
 - cancellation, target-focus drift detection, result-size limits, and
-  best-effort debugger cleanup;
+  best-effort debugger cleanup (cancellation stops at the next bounded action
+  and cannot roll back a mutation that already started);
 - one-shot pre-mutation authorization before a provider effect; and
 - a route-free llm-wiki self-test manifest; and
 - a content-free extension status panel with connected, running, authorization,
@@ -97,7 +110,7 @@ possible.
 
 ```text
 targeted adapter
-  -> retrieve exact user-created active-tab collaboration
+  -> select one exact user-created grant from the private collaboration workspace
   -> deterministic typed program + exact approved plan hash
   -> BrowserExecutorClient over a private Unix socket
   -> allowlisted Native Messaging host

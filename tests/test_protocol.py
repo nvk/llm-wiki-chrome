@@ -162,6 +162,32 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ProtocolError, "exactly one"):
             validate_program(program)
 
+    def test_private_ax_snapshot_hash_is_bounded_and_declared(self) -> None:
+        program = load_fixture("google-docs-suggestions-v1.json")
+        program["private_slots"].append("baseline.sha256")
+        program["actions"].insert(3, {
+            "op": "assert_ax_private_sha256",
+            "slot": "baseline.sha256",
+            "locator": {"name_matches": ".+"},
+            "fields": ["role", "name", "value"],
+            "max_items": 5000,
+        })
+        program["limits"]["max_actions"] += 1
+        resign(program)
+        self.assertEqual(validate_program(program), program)
+
+        undeclared = copy.deepcopy(program)
+        undeclared["actions"][3]["slot"] = "other.sha256"
+        resign(undeclared)
+        with self.assertRaisesRegex(ProtocolError, "undeclared private slot"):
+            validate_program(undeclared)
+
+        oversized = copy.deepcopy(program)
+        oversized["actions"][3]["max_items"] = 5001
+        resign(oversized)
+        with self.assertRaisesRegex(ProtocolError, "max_items"):
+            validate_program(oversized)
+
     def test_action_count_includes_bounded_branches(self) -> None:
         program = load_fixture("google-docs-suggestions-v1.json")
         program["limits"]["max_actions"] = 3
