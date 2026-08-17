@@ -27,6 +27,7 @@ bounded execution slice:
 - byte-capped private viewport JPEG capture with no executor-side persistence;
 - bounded viewport scrolling, deduplicating long-list collection, and private
   AX link/description extraction;
+- bounded exact-tab browser-log capture through private result slots;
 - typed click, focus, key-chord, and private text-insertion actions;
 - cancellation, target-focus drift detection, result-size limits, and
   best-effort debugger cleanup;
@@ -121,6 +122,9 @@ Production permissions are limited to explicitly reviewed origins; there is no
 allowlist and does not accept `Runtime.evaluate`, raw methods, scripts, or
 page-generated actions.
 
-The executor is trusted local code, not an operating-system sandbox. Targeted
+The fixed CDP allowlist also includes only `Log.enable`/`Log.disable` for a
+paired, size-capped private browser-log window; it does not expose raw
+diagnostic methods or console/network interception. The executor is trusted
+local code, not an operating-system sandbox. Targeted
 adapters remain responsible for authorizing every provider effect and proving
 the provider's final state independently. See [SECURITY.md](SECURITY.md).

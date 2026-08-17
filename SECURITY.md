@@ -14,7 +14,7 @@ The extension independently validates the signed program and private-slot
 shape. The Python and extension validators both reject origins outside the same
 explicit production allowlist. The extension activates one exact tab, aborts on
 target or focus drift, uses only a
-hardcoded DOM/Accessibility/Input/Page CDP allowlist, and detaches the debugger
+hardcoded DOM/Accessibility/Input/Page/Log CDP allowlist, and detaches the debugger
 in a `finally` path. Waits retry only locator-not-ready conditions; cancellation,
 deadline, debugger, and target errors fail immediately. Public results are
 filtered to declared content-free counters, while bounded page data is returned
@@ -22,6 +22,11 @@ only through declared private result slots. Viewport scrolling and scrolling
 collection are bounded, typed read actions; long-list collection is capped by
 the program repeat, item, deadline, and private-result limits. Extracted link
 URLs and descriptions remain private results.
+
+Browser diagnostics are limited to one paired `Log.enable`/`Log.disable`
+window on the exact attached tab. Only bounded scalar fields are retained;
+remote-object arguments and stack traces are ignored, overflow is marked only
+inside the private result, and listeners are removed during failure cleanup.
 
 This design deliberately excludes arbitrary JavaScript, `Runtime.evaluate`, raw
 CDP method names, ambient tab enumeration, page-authored actions, broad origins,

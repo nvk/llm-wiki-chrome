@@ -6,7 +6,7 @@ const ALLOWED_CDP_METHODS = new Set([
   "DOM.disable", "DOM.enable", "DOM.focus", "DOM.getBoxModel", "DOM.getDocument",
   "DOM.querySelector", "DOM.scrollIntoViewIfNeeded", "Input.dispatchKeyEvent",
   "Input.dispatchMouseEvent", "Input.insertText", "Page.disable", "Page.enable",
-  "Page.captureScreenshot",
+  "Page.captureScreenshot", "Log.disable", "Log.enable",
 ]);
 const RETRYABLE_WAIT_CODES = new Set([
   "element-not-found", "element-state-mismatch", "element-ambiguous", "target-not-ready",
@@ -91,6 +91,7 @@ export class BrowserExecutor {
     this.attached = false;
     this.actionCount = 0;
     this.mutationStarted = false;
+    this.logCapture = null;
     this.deadline = 0;
   }
 
@@ -113,6 +114,7 @@ export class BrowserExecutor {
         private: this.privateResults,
       };
     } finally {
+      if (this.logCapture) await this.stopLogCapture(true);
       if (this.attached) await this.detachDebugger(true);
     }
   }
@@ -156,6 +158,8 @@ export class BrowserExecutor {
       collect_ax_by_scrolling: () => this.collectAXByScrolling(action),
       capture_viewport_private: () => this.captureViewport(action),
       scroll_viewport: () => this.scrollViewport(action),
+      start_log_capture: () => this.startLogCapture(action),
+      stop_log_capture: () => this.stopLogCapture(false),
       before_mutation: () => this.beforeMutation(),
     };
     const handler = handlers[action.op];
@@ -553,6 +557,96 @@ export class BrowserExecutor {
       deltaX: 0,
       deltaY,
     });
+  }
+
+  handleLogEvent(source, method, parameters) {
+    const capture = this.logCapture;
+    if (!capture || source?.tabId !== this.tabId || method !== "Log.entryAdded") return;
+    const entry = parameters?.entry;
+    if (!entry || typeof entry !== "object" || typeof entry.source !== "string" ||
+        typeof entry.level !== "string" || typeof entry.text !== "string") {
+      capture.failed = "private-log-invalid";
+      return;
+    }
+    if (capture.entries.length >= capture.maxEntries) {
+      capture.truncated = true;
+      return;
+    }
+    if (new TextEncoder().encode(entry.text).length > capture.maxTextBytes) {
+      capture.truncated = true;
+      return;
+    }
+    try {
+      const row = {
+        source: this.safeExtractedValue(entry.source),
+        level: this.safeExtractedValue(entry.level),
+        text: this.safeExtractedValue(entry.text),
+        timestamp: this.safeExtractedValue(entry.timestamp),
+        url: this.safeExtractedValue(entry.url),
+        line_number: this.safeExtractedValue(entry.lineNumber),
+      };
+      const size = new TextEncoder().encode(JSON.stringify(row)).length + 1;
+      if (capture.encodedBytes + size > MAX_PRIVATE_RESULTS_BYTES) {
+        capture.truncated = true;
+        return;
+      }
+      capture.encodedBytes += size;
+      capture.entries.push(row);
+    } catch (_error) {
+      capture.failed = "private-log-invalid";
+    }
+  }
+
+  async startLogCapture(action) {
+    if (!this.attached || this.logCapture || !this.chrome.debugger?.onEvent?.addListener) {
+      fail("log-capture-state-invalid");
+    }
+    const capture = {
+      privateResult: action.private_result,
+      maxEntries: action.max_entries,
+      maxTextBytes: action.max_text_bytes,
+      entries: [],
+      encodedBytes: 2,
+      truncated: false,
+      failed: null,
+      listener: null,
+    };
+    capture.listener = (source, method, parameters) => this.handleLogEvent(source, method, parameters);
+    this.logCapture = capture;
+    this.chrome.debugger.onEvent.addListener(capture.listener);
+    try {
+      await this.command("Log.enable", {});
+    } catch (error) {
+      this.chrome.debugger.onEvent.removeListener(capture.listener);
+      this.logCapture = null;
+      throw error;
+    }
+  }
+
+  async stopLogCapture(bestEffort) {
+    const capture = this.logCapture;
+    if (!capture) {
+      if (bestEffort) return;
+      fail("log-capture-state-invalid");
+    }
+    this.logCapture = null;
+    try {
+      this.chrome.debugger.onEvent.removeListener(capture.listener);
+    } catch (_error) {
+      if (!bestEffort) fail("log-capture-cleanup-failed");
+    }
+    try {
+      await this.command("Log.disable", {});
+    } catch (_error) {
+      if (!bestEffort) fail("log-capture-cleanup-failed");
+    }
+    if (bestEffort) return;
+    if (capture.failed) fail(capture.failed);
+    this.privateResults[capture.privateResult] = {
+      entries: capture.entries,
+      truncated: capture.truncated,
+    };
+    this.assertPrivateResultsBounded(capture.privateResult);
   }
 
   async beforeMutation() {

@@ -7,7 +7,7 @@ const ALLOWED_OPERATIONS = new Set([
   "first_success", "click_ax", "click_dom", "focus_ax", "dispatch_key_chord",
   "insert_private_text", "assert_ax_private_value", "extract_ax",
   "extract_ax_collection", "collect_ax_by_scrolling", "capture_viewport_private",
-  "scroll_viewport", "before_mutation",
+  "scroll_viewport", "start_log_capture", "stop_log_capture", "before_mutation",
 ]);
 const FORBIDDEN_KEYS = new Set([
   "javascript", "script", "expression", "runtime_evaluate", "cdp_method",
@@ -42,6 +42,7 @@ const ACTION_KEYS = new Map([
   ["attach_debugger", new Set(["op"])],
   ["detach_debugger", new Set(["op"])],
   ["before_mutation", new Set(["op"])],
+  ["stop_log_capture", new Set(["op"])],
   ["wait_ax", new Set(["op", "locator", "timeout_ms"])],
   ["wait_dom", new Set(["op", "locator", "timeout_ms"])],
   ["assert_ax", new Set(["op", "locator"])],
@@ -60,6 +61,7 @@ const ACTION_KEYS = new Map([
   ])],
   ["capture_viewport_private", new Set(["op", "private_result", "quality", "max_bytes"])],
   ["scroll_viewport", new Set(["op", "direction", "distance_px"])],
+  ["start_log_capture", new Set(["op", "private_result", "max_entries", "max_text_bytes"])],
   ["first_success", new Set(["op", "branches"])],
 ]);
 const EXTRACTION_FIELDS = new Set([
@@ -291,6 +293,13 @@ function validateAction(action, program, index) {
        action.dedupe_fields.some((field) => !action.fields.includes(field)))) {
     throw new Error("A scrolling collection declaration is invalid.");
   }
+  if (action.op === "start_log_capture" &&
+      (!program.result.private_fields.includes(action.private_result) ||
+       !Number.isInteger(action.max_entries) || action.max_entries < 1 || action.max_entries > 500 ||
+       !Number.isInteger(action.max_text_bytes) ||
+       action.max_text_bytes < 256 || action.max_text_bytes > 16384)) {
+    throw new Error("A private log capture declaration is invalid.");
+  }
 }
 
 export function validatePrivateValues(program, values) {
@@ -386,9 +395,18 @@ export async function validateProgram(program) {
       topLevel.slice(topLevel.indexOf("before_mutation") + 1).includes("first_success")) {
     throw new Error("Mutation recovery branches must precede the mutation boundary.");
   }
+  const logStarts = operations.filter((operation) => operation === "start_log_capture").length;
+  const logStops = operations.filter((operation) => operation === "stop_log_capture").length;
+  if (logStarts !== logStops || logStarts > 1 ||
+      topLevel.filter((operation) => operation === "start_log_capture").length !== logStarts ||
+      topLevel.filter((operation) => operation === "stop_log_capture").length !== logStops ||
+      (logStarts === 1 && operations.indexOf("start_log_capture") >= operations.indexOf("stop_log_capture"))) {
+    throw new Error("The private log capture lifecycle is invalid.");
+  }
   const extracted = new Set(
     flat.filter((action) => [
       "extract_ax", "extract_ax_collection", "collect_ax_by_scrolling", "capture_viewport_private",
+      "start_log_capture",
     ].includes(action.op))
       .map((action) => action.private_result),
   );

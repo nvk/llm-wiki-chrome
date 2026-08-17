@@ -30,6 +30,12 @@ async function run() {
     actions: [
       {op: "open_or_focus_exact_url"},
       {op: "attach_debugger"},
+      {
+        op: "start_log_capture",
+        private_result: "page.browser_log",
+        max_entries: 50,
+        max_text_bytes: 4096,
+      },
       {op: "scroll_viewport", direction: "down", distance_px: 200},
       {
         op: "capture_viewport_private",
@@ -37,11 +43,12 @@ async function run() {
         quality: 40,
         max_bytes: 262144,
       },
+      {op: "stop_log_capture"},
       {op: "detach_debugger"},
     ],
     result: {
       public_fields: ["status", "action_count", "private_result_count"],
-      private_fields: ["page.viewport"],
+      private_fields: ["page.viewport", "page.browser_log"],
     },
   };
   program.program_sha256 = await canonicalProgramHash(program);

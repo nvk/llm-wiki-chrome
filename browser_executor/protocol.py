@@ -51,6 +51,8 @@ ALLOWED_OPERATIONS = {
     "collect_ax_by_scrolling",
     "capture_viewport_private",
     "scroll_viewport",
+    "start_log_capture",
+    "stop_log_capture",
     "before_mutation",
 }
 FORBIDDEN_KEYS = {
@@ -93,6 +95,7 @@ ACTION_KEYS = {
     "attach_debugger": {"op"},
     "detach_debugger": {"op"},
     "before_mutation": {"op"},
+    "stop_log_capture": {"op"},
     "wait_ax": {"op", "locator", "timeout_ms"},
     "wait_dom": {"op", "locator", "timeout_ms"},
     "assert_ax": {"op", "locator"},
@@ -111,6 +114,7 @@ ACTION_KEYS = {
     },
     "capture_viewport_private": {"op", "private_result", "quality", "max_bytes"},
     "scroll_viewport": {"op", "direction", "distance_px"},
+    "start_log_capture": {"op", "private_result", "max_entries", "max_text_bytes"},
     "first_success": {"op", "branches"},
 }
 LOCATOR_OPERATIONS = {
@@ -466,6 +470,16 @@ def _validate_action(
             or not set(dedupe_fields).issubset(fields)
         ):
             raise ProtocolError("scrolling collection dedupe_fields are invalid")
+    if operation == "start_log_capture":
+        if action.get("private_result") not in private_results:
+            raise ProtocolError("log capture references an undeclared private result")
+        if type(action.get("max_entries")) is not int or not 1 <= action["max_entries"] <= 500:
+            raise ProtocolError("log capture max_entries is out of bounds")
+        if (
+            type(action.get("max_text_bytes")) is not int
+            or not 256 <= action["max_text_bytes"] <= 16384
+        ):
+            raise ProtocolError("log capture max_text_bytes is out of bounds")
 
 
 def validate_program(program: Any) -> dict[str, Any]:
@@ -562,12 +576,25 @@ def validate_program(program: Any) -> dict[str, Any]:
         boundary_index = top_level_operations.index("before_mutation")
         if "first_success" in top_level_operations[boundary_index + 1:]:
             raise ProtocolError("mutation recovery branches must precede the mutation boundary")
+    log_starts = operations.count("start_log_capture")
+    log_stops = operations.count("stop_log_capture")
+    if (
+        log_starts != log_stops
+        or log_starts > 1
+        or top_level_operations.count("start_log_capture") != log_starts
+        or top_level_operations.count("stop_log_capture") != log_stops
+        or (
+            log_starts == 1
+            and operations.index("start_log_capture") >= operations.index("stop_log_capture")
+        )
+    ):
+        raise ProtocolError("private log capture lifecycle is invalid")
     extracted = {
         action["private_result"]
         for action in flat
         if action["op"] in {
             "extract_ax", "extract_ax_collection", "collect_ax_by_scrolling",
-            "capture_viewport_private",
+            "capture_viewport_private", "start_log_capture",
         }
     }
     if extracted != private_result_set:

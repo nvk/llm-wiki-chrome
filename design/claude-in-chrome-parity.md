@@ -33,8 +33,9 @@ browser planner into this repository.
 | Side-panel status | Content-free connector/job state only | Foundation complete |
 | Screenshots / visual context | Bounded private viewport JPEG, no automatic model upload | Implemented in source; consumer parity pending |
 | Scroll long pages and virtualized lists | Bounded typed scroll plus deduplicating AX collection on the exact tab | Implemented in source; X provider adoption pending |
+| Browser log entries | Paired, bounded exact-tab CDP Log window with private-only scalar results | Implemented in source; live-browser gate pending |
 | Multiple tabs | Explicit job-owned tabs/group only, never ambient tabs | Later typed protocol version |
-| Console logs and network debugging | Bounded private diagnostics with domain/method allowlists | Later read-only debug capability |
+| Console API and network debugging | Separate bounded private diagnostics with domain/method allowlists | Later read-only debug capability |
 | Downloads and uploads | Registered file roots, typed operations, provider verification | Later explicit effect capability |
 | Workflow recording / shortcuts | Record only typed actions, require review and signing before replay | Later targeted-adapter tooling |
 | Scheduled/background tasks | External scheduler plus durable adapter journal | Later; never extension-owned intent |
@@ -63,7 +64,7 @@ Mach-service policy, so a successful real-browser result remains pending in an
 allowed local test profile. Live targeted-adapter shadow runs remain the next
 gate; this source state has not been released or installed as an upgrade.
 
-Arbitrary sites, tab groups, console/network diagnostics, downloads/uploads,
+Arbitrary sites, tab groups, console-API/network diagnostics, downloads/uploads,
 recording, schedules, and notifications are separate review events rather than
 prerequisites for this slice. The viewport-only JPEG action was added without a
 new permission: it is exact-target, quality- and byte-capped, declared as a

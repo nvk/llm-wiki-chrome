@@ -258,6 +258,39 @@ class ProtocolTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ProtocolError):
                 validate_program(invalid)
 
+    def test_private_browser_log_capture_is_paired_and_bounded(self) -> None:
+        program = load_fixture("x-space-read-v1.json")
+        program["actions"].insert(3, {
+            "op": "start_log_capture",
+            "private_result": "space.browser-log",
+            "max_entries": 50,
+            "max_text_bytes": 4096,
+        })
+        program["actions"].insert(-1, {"op": "stop_log_capture"})
+        program["result"]["private_fields"].append("space.browser-log")
+        resign(program)
+        self.assertEqual(validate_program(program), program)
+
+        for change in (
+            {"max_entries": 501},
+            {"max_text_bytes": 255},
+            {"max_entries": True},
+        ):
+            invalid = copy.deepcopy(program)
+            start = next(action for action in invalid["actions"] if action["op"] == "start_log_capture")
+            start.update(change)
+            resign(invalid)
+            with self.subTest(change=change), self.assertRaises(ProtocolError):
+                validate_program(invalid)
+
+        missing_stop = copy.deepcopy(program)
+        missing_stop["actions"] = [
+            action for action in missing_stop["actions"] if action["op"] != "stop_log_capture"
+        ]
+        resign(missing_stop)
+        with self.assertRaisesRegex(ProtocolError, "lifecycle"):
+            validate_program(missing_stop)
+
     def test_nested_branches_are_bounded(self) -> None:
         program = load_fixture("x-space-read-v1.json")
         nested = {"op": "first_success", "branches": [[{"op": "assert_exact_target"}]]}

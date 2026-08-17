@@ -8,6 +8,24 @@ import {canonicalProgramHash, validateProgram} from "../../extension/protocol.mj
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
+class EventHook {
+  constructor() {
+    this.listeners = [];
+  }
+
+  addListener(listener) {
+    this.listeners.push(listener);
+  }
+
+  removeListener(listener) {
+    this.listeners = this.listeners.filter((candidate) => candidate !== listener);
+  }
+
+  emit(...values) {
+    for (const listener of [...this.listeners]) listener(...values);
+  }
+}
+
 function property(name, value) {
   return {name, value: {value}};
 }
@@ -76,6 +94,7 @@ class FakeChrome {
       },
     };
     this.debugger = {
+      onEvent: new EventHook(),
       attach: async ({tabId}, version) => {
         assert.equal(tabId, this.tab.id);
         assert.equal(version, "1.3");
@@ -131,7 +150,18 @@ class FakeChrome {
 
   command(method, parameters) {
     if (["DOM.enable", "DOM.disable", "Accessibility.enable", "Accessibility.disable",
-      "Page.enable", "Page.disable", "DOM.scrollIntoViewIfNeeded"].includes(method)) return {};
+      "Page.enable", "Page.disable", "Log.disable", "DOM.scrollIntoViewIfNeeded"].includes(method)) return {};
+    if (method === "Log.enable") {
+      this.debugger.onEvent.emit(
+        {tabId: this.tab.id},
+        "Log.entryAdded",
+        {entry: {
+          source: "javascript", level: "warning", text: "Synthetic browser diagnostic",
+          timestamp: 1234, url: "https://x.com/i/spaces/SYNTHETIC_SPACE", lineNumber: 7,
+        }},
+      );
+      return {};
+    }
     if (method === "Accessibility.getFullAXTree") return {nodes: this.tree()};
     if (method === "DOM.getDocument") return {root: {nodeId: 1}};
     if (method === "DOM.querySelector") {
@@ -316,6 +346,43 @@ async function scrollingCollectionProgram() {
   return validateProgram(program);
 }
 
+async function browserLogProgram() {
+  const program = {
+    protocol: "llm-wiki-browser-executor/v1",
+    program_id: "synthetic-browser-log-v1",
+    program_sha256: "0".repeat(64),
+    plan_sha256: "1".repeat(64),
+    driver: {id: "synthetic-driver", version: "0.0.1"},
+    capability: "read",
+    target: {
+      url: "https://x.com/i/spaces/SYNTHETIC_SPACE",
+      origin: "https://x.com",
+      path_prefixes: ["/i/spaces/SYNTHETIC_SPACE"],
+    },
+    limits: {timeout_ms: 5000, max_actions: 8, max_repeat: 2},
+    private_slots: [],
+    actions: [
+      {op: "open_or_focus_exact_url"},
+      {op: "attach_debugger"},
+      {
+        op: "start_log_capture",
+        private_result: "page.browser_log",
+        max_entries: 10,
+        max_text_bytes: 1024,
+      },
+      {op: "assert_exact_target"},
+      {op: "stop_log_capture"},
+      {op: "detach_debugger"},
+    ],
+    result: {
+      public_fields: ["status", "action_count", "private_result_count"],
+      private_fields: ["page.browser_log"],
+    },
+  };
+  program.program_sha256 = await canonicalProgramHash(program);
+  return validateProgram(program);
+}
+
 async function testReadExecutionAndPrivateExtraction() {
   const program = await validateProgram(loadFixture("x-space-read-v1.json"));
   const fake = new FakeChrome(program.target.url, "read");
@@ -394,6 +461,26 @@ async function testScrollingCollectionDeduplicatesAndStopsAtBound() {
   assert.equal(fake.attached, false);
 }
 
+async function testPrivateBrowserLogCaptureIsBoundedAndCleanedUp() {
+  const program = await browserLogProgram();
+  const fake = new FakeChrome(program.target.url, "read");
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac"});
+  const result = await executor.run(program, {}, async () => false);
+  assert.deepEqual(result.private["page.browser_log"], {
+    entries: [{
+      source: "javascript",
+      level: "warning",
+      text: "Synthetic browser diagnostic",
+      timestamp: 1234,
+      url: "https://x.com/i/spaces/SYNTHETIC_SPACE",
+      line_number: 7,
+    }],
+    truncated: false,
+  });
+  assert.equal(fake.debugger.onEvent.listeners.length, 0);
+  assert.equal(fake.attached, false);
+}
+
 async function testMutationDenialFailsClosed() {
   const program = await mutationProgram();
   const fake = new FakeChrome(program.target.url, "mutation");
@@ -446,6 +533,7 @@ await testMutationBoundaryAndPrivateInsertion();
 await testPrivateViewportCapture();
 await testViewportScrollAndPrivateLinkMetadata();
 await testScrollingCollectionDeduplicatesAndStopsAtBound();
+await testPrivateBrowserLogCaptureIsBoundedAndCleanedUp();
 await testMutationDenialFailsClosed();
 await testTargetDriftIsNotRetried();
 await testCancellationFailsClosed();

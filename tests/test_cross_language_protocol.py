@@ -59,6 +59,17 @@ class CrossLanguageProtocolTests(unittest.TestCase):
         })
         cases.append(resign(scrolling_collection))
 
+        browser_log = copy.deepcopy(base)
+        browser_log["actions"].insert(3, {
+            "op": "start_log_capture",
+            "private_result": "space.browser-log",
+            "max_entries": 50,
+            "max_text_bytes": 4096,
+        })
+        browser_log["actions"].insert(-1, {"op": "stop_log_capture"})
+        browser_log["result"]["private_fields"].append("space.browser-log")
+        cases.append(resign(browser_log))
+
         unknown = copy.deepcopy(base)
         unknown["ambient_browsing"] = True
         cases.append(resign(unknown))
@@ -112,7 +123,7 @@ class CrossLanguageProtocolTests(unittest.TestCase):
         self.assertEqual(extension_decisions, python_decisions)
         self.assertEqual(
             python_decisions,
-            [True, True, True, True, False, False, False, False, False],
+            [True, True, True, True, True, False, False, False, False, False],
         )
 
 
