@@ -13,6 +13,7 @@ const jobState = document.getElementById("job-state");
 const jobProgress = document.getElementById("job-progress");
 const jobDetail = document.getElementById("job-detail");
 const cancelJobButton = document.getElementById("cancel-job");
+let connectFailure = false;
 
 const labels = {
   connected: "Local connector is ready",
@@ -67,10 +68,11 @@ function renderCollaborations(collaborations, connectorReady) {
     ? "Open an HTTPS page and click the extension to collaborate."
     : "Your local agent can control only the grants listed below.";
   collaborationIndicator.className = `indicator ${count ? "connected" : "inactive"}`;
-  connectTabButton.textContent = count && connectorReady
+  const connected = count > 0 && connectorReady;
+  connectTabButton.textContent = connected
     ? "Connected — agent notified"
-    : "Connect active tab";
-  connectTabButton.className = `connect-button ${count && connectorReady ? "connected" : ""}`;
+    : connectFailure ? "Connection failed — retry" : "Connect active tab";
+  connectTabButton.className = `connect-button ${connected ? "connected" : connectFailure ? "error" : ""}`;
 }
 
 function renderJob(job) {
@@ -124,7 +126,9 @@ stopAllButton.addEventListener("click", () => {
 connectTabButton.addEventListener("click", () => {
   connectTabButton.disabled = true;
   connectTabButton.textContent = "Connecting active tab…";
-  send({type: "connect-active-tab"}).finally(() => {
+  send({type: "connect-active-tab"}).then((response) => {
+    connectFailure = response?.connected !== true;
+  }).finally(() => {
     connectTabButton.disabled = false;
     refresh();
   });

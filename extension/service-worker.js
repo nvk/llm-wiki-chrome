@@ -210,15 +210,19 @@ async function revokeCollaboration(collaborationId = null, revokeAll = false) {
 
 async function startCollaboration(tab) {
   const panel = Number.isInteger(tab?.id) ? chrome.sidePanel.open({tabId: tab.id}) : Promise.resolve();
-  const target = targetFromTab(tab);
+  let exactTab = tab;
+  if (Number.isInteger(tab?.id)) {
+    exactTab = await chrome.tabs.get(tab.id).catch(() => tab);
+  }
+  const target = targetFromTab(exactTab);
   if (!target) {
     await panel.catch(() => {});
-    return;
+    return false;
   }
   await withWorkspaceMutation(async () => {
     const workspace = await checkedWorkspaceUnlocked();
     const existing = workspace.collaborations.find(
-      (value) => value.tab_id === tab.id && value.url === target.url,
+      (value) => value.tab_id === exactTab.id && value.url === target.url,
     );
     if (existing) {
       workspace.selected_collaboration_id = existing.collaboration_id;
@@ -226,16 +230,16 @@ async function startCollaboration(tab) {
       return;
     }
     const removed = workspace.collaborations.filter(
-      (value) => value.tab_id === tab.id || value.url === target.url,
+      (value) => value.tab_id === exactTab.id || value.url === target.url,
     );
     let collaborations = workspace.collaborations.filter(
-      (value) => value.tab_id !== tab.id && value.url !== target.url,
+      (value) => value.tab_id !== exactTab.id && value.url !== target.url,
     );
     if (collaborations.length >= MAX_COLLABORATIONS) removed.push(collaborations.shift());
     const value = {
       collaboration_id: collaborationId(),
-      tab_id: tab.id,
-      window_id: tab.windowId,
+      tab_id: exactTab.id,
+      window_id: exactTab.windowId,
       url: target.url,
       origin: target.origin,
     };
@@ -246,6 +250,7 @@ async function startCollaboration(tab) {
     }, removed.filter(Boolean));
   });
   await panel.catch(() => {});
+  return true;
 }
 
 async function collaborationForProgram(program) {
@@ -555,7 +560,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "connect-active-tab") {
     chrome.tabs.query({active: true, lastFocusedWindow: true}).then(async (tabs) => {
       if (tabs.length !== 1) return {connected: false};
-      await startCollaboration(tabs[0]);
+      const connected = await startCollaboration(tabs[0]);
+      if (!connected) return {connected: false};
       const workspace = await checkedWorkspace();
       return {
         connected: workspace.collaborations.some((value) => value.tab_id === tabs[0].id),

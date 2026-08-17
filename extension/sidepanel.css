@@ -99,6 +99,10 @@ button {
   background: #317258;
 }
 
+.connect-button.error {
+  background: #9f3f36;
+}
+
 .workspace,
 .job {
   margin: -12px 0 28px;

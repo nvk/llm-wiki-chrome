@@ -115,7 +115,12 @@ globalThis.chrome = {
     },
     query: async (query) => {
       assert.deepEqual(query, {active: true, lastFocusedWindow: true});
-      return [...tabs.values()].filter((value) => value.active).map((value) => structuredClone(value));
+      return [...tabs.values()].filter((value) => value.active).map((value) => ({
+        id: value.id,
+        windowId: value.windowId,
+        active: value.active,
+        status: value.status,
+      }));
     },
   },
   windows: {
@@ -178,7 +183,7 @@ await nativePort.next((message) => message.type === "collaborations" && message.
 
 tabs.get(1).active = false;
 tabs.get(2).active = true;
-chrome.action.onClicked.emit(structuredClone(tabs.get(2)));
+chrome.action.onClicked.emit({id: 2, windowId: 1, active: true, status: "complete"});
 await waitFor(() => stored.collaborationWorkspace?.collaborations?.length === 2);
 assert.equal(badges.get(1), "ON");
 assert.equal(badges.get(2), "ON");
