@@ -70,6 +70,7 @@ const tabs = new Map([
 ]);
 let attached = false;
 let panelBehavior = null;
+const openedPanels = [];
 let exposeSensitiveTabFields = true;
 
 globalThis.chrome = {
@@ -85,6 +86,7 @@ globalThis.chrome = {
     onClicked: new EventHook(),
   },
   sidePanel: {
+    open: async (options) => openedPanels.push(structuredClone(options)),
     setPanelBehavior: async (behavior) => {
       panelBehavior = structuredClone(behavior);
     },
@@ -182,7 +184,7 @@ async function runtimeMessage(message) {
 await import("../../extension/service-worker.js");
 nativePort.onMessage.emit({protocol: PROTOCOL, type: "ready"});
 await waitFor(() => panelBehavior);
-assert.deepEqual(panelBehavior, {openPanelOnActionClick: true});
+assert.deepEqual(panelBehavior, {openPanelOnActionClick: false});
 
 assert.equal((await runtimeMessage({type: "connect-active-tab"})).connected, true);
 await waitFor(() => stored.collaborationWorkspace?.collaborations?.length === 1);
@@ -193,8 +195,9 @@ await nativePort.next((message) => message.type === "collaborations" && message.
 
 tabs.get(1).active = false;
 tabs.get(2).active = true;
-chrome.action.onClicked.emit({id: 2, windowId: 1, active: true, status: "complete"});
+chrome.action.onClicked.emit(structuredClone(tabs.get(2)));
 await waitFor(() => stored.collaborationWorkspace?.collaborations?.length === 2);
+assert.deepEqual(openedPanels, [{tabId: 2}]);
 assert.equal(badges.get(1), "ON");
 assert.equal(badges.get(2), "ON");
 const listMessage = await nativePort.next(

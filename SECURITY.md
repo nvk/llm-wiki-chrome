@@ -14,9 +14,10 @@ idempotency, and independent read-back verification.
 
 The extension has no persistent host permissions. Each action click creates a
 temporary grant for that exact active tab through Chrome's `activeTab`
-permission. Chrome's declarative action behavior opens the panel, whose load
-consumes that grant; a runtime message never attempts to manufacture a user
-gesture or open the panel. The bounded workspace contains at most 16 explicitly clicked tabs.
+permission. The action listener consumes that granted `Tab` and opens the panel
+synchronously inside the same gesture; a runtime message never attempts to
+manufacture a user gesture or open the panel. The bounded workspace contains at
+most 16 explicitly clicked tabs.
 The extension and private native relay keep grants in session memory, rotate a
 grant on same-origin navigation, revoke it on cross-origin navigation or close,
 and display only its hostname in the side panel. A local agent or targeted

@@ -211,8 +211,11 @@ async function revokeCollaboration(collaborationId = null, revokeAll = false) {
 async function startCollaboration(tab) {
   if (!Number.isInteger(tab?.id)) return "missing-tab";
   let exactTab = tab;
-  exactTab = await chrome.tabs.get(tab.id).catch(() => tab);
-  const target = targetFromTab(exactTab);
+  let target = targetFromTab(exactTab);
+  if (!target) {
+    exactTab = await chrome.tabs.get(tab.id).catch(() => tab);
+    target = targetFromTab(exactTab);
+  }
   if (!target) {
     return typeof exactTab?.url === "string" ? "unsupported-tab" : "active-tab-grant-required";
   }
@@ -520,7 +523,7 @@ async function handleNativeMessage(message, port) {
 }
 
 async function configureExtension() {
-  await chrome.sidePanel.setPanelBehavior({openPanelOnActionClick: true}).catch(() => {});
+  await chrome.sidePanel.setPanelBehavior({openPanelOnActionClick: false}).catch(() => {});
   connectNativeBridge();
   await setJobState(null).catch(() => {});
   const workspace = await checkedWorkspace();
@@ -533,6 +536,9 @@ chrome.runtime.onStartup.addListener(configureExtension);
 configureExtension().catch(() => {});
 
 chrome.action.onClicked.addListener((tab) => {
+  if (Number.isInteger(tab?.id)) {
+    chrome.sidePanel.open({tabId: tab.id}).catch(() => {});
+  }
   startCollaboration(tab).catch(() => {});
 });
 

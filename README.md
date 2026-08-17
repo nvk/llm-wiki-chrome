@@ -28,10 +28,11 @@ An active grant is visible on the page as a fixed green outline and
 `LLM WIKI • CONTROLLED` pill, plus an `ON` action badge. The marker is packaged,
 noninteractive, content-blind, and injected only after the extension click; it
 is removed when the grant is revoked and never receives page or job content.
-Chrome opens the side panel through `openPanelOnActionClick`; the worker never
-tries to reopen it through a relayed message. Panel load immediately consumes
-the action-created grant. Its connect button is a status/retry control, not a
-substitute for the toolbar gesture that creates `activeTab` authority. The
+The action listener receives Chrome's `activeTab` grant and synchronously opens
+the side panel for that exact tab. Panel load confirms the action-created grant;
+a relayed panel message never tries to open the panel or manufacture a user
+gesture. Its connect button is a status/retry control, not a substitute for the
+toolbar gesture that creates `activeTab` authority. The
 connected state means the grant has been published through the live local
 connector, so the agent can detect readiness with `browser_status` without
 asking the user to inspect extension internals.
@@ -97,7 +98,8 @@ bounded execution slice:
   Chrome profiles or processes cannot overwrite one another's shared tabs;
 - a fixed page outline/pill and toolbar badge showing exactly which tabs are
   controlled;
-- action-opened auto-connect side panel plus content-free agent readiness tool;
+- action-listener tab grant, side-panel status/retry control, and content-free
+  agent readiness tool;
 - a content-free side-panel workspace, progress meter, per-tab revocation, and cancellation;
 - separate read and mutation capabilities;
 - one governed mutation callback in the Python client;
