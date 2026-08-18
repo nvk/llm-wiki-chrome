@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import threading
 import unittest
 from typing import Any, Callable
 
 from browser_executor.collaboration import (
+    MAX_ACTIVE_SCHEDULES,
+    MAX_RETAINED_SCHEDULES,
     BrowserCollaborationController,
     CollaborationError,
 )
@@ -253,6 +256,43 @@ class CollaborationControllerTests(unittest.TestCase):
         self.assertNotIn("url", status["schedules"][0])
         cancelled = self.controller.schedule_cancel(scheduled["schedule_id"])
         self.assertEqual(cancelled["status"], "cancelled")
+
+    def test_schedule_registration_is_bounded(self) -> None:
+        active = [
+            self.controller.schedule_snapshot(self.collaboration_id, delay_seconds=3600)
+            for _ in range(MAX_ACTIVE_SCHEDULES)
+        ]
+        with self.assertRaisesRegex(CollaborationError, "too many active"):
+            self.controller.schedule_snapshot(self.collaboration_id, delay_seconds=3600)
+        for item in active:
+            self.controller.schedule_cancel(item["schedule_id"])
+
+        retained = 0
+        while len(self.controller._schedules) < MAX_RETAINED_SCHEDULES:
+            scheduled = self.controller.schedule_snapshot(
+                self.collaboration_id, delay_seconds=3600
+            )
+            job = self.controller._schedules[scheduled["schedule_id"]]
+            job["timer"].cancel()
+            job["state"] = "failed"
+            retained += 1
+        self.assertEqual(retained, MAX_RETAINED_SCHEDULES - MAX_ACTIVE_SCHEDULES)
+        self.assertLessEqual(len(self.controller._schedules), MAX_RETAINED_SCHEDULES)
+
+        failed = [
+            key
+            for key, job in self.controller._schedules.items()
+            if job["state"] == "failed"
+        ]
+        for key in failed[: MAX_ACTIVE_SCHEDULES - 1]:
+            self.controller._schedules[key]["state"] = "scheduled"
+        scheduled = self.controller.schedule_snapshot(
+            self.collaboration_id, delay_seconds=3600
+        )
+        with self.assertRaisesRegex(CollaborationError, "too many active"):
+            self.controller.schedule_snapshot(self.collaboration_id, delay_seconds=3600)
+        for key, job in self.controller._schedules.items():
+            job["timer"].cancel()
 
 
 if __name__ == "__main__":
