@@ -18,6 +18,8 @@ access, or page-authored actions. Provider-specific adapters still own stronger
 routing, authentication, journals, recovery, idempotency, and final read-back
 verification for consequential workflows.
 
+[Installation, collaboration, security, and troubleshooting guide →](https://llm-wiki.net/chrome/)
+
 ## Click-to-collaborate flow
 
 The extension does not need persistent site access or per-page Chrome host
