@@ -18,6 +18,8 @@ access, or page-authored actions. Provider-specific adapters still own stronger
 routing, authentication, journals, recovery, idempotency, and final read-back
 verification for consequential workflows.
 
+[![LLM Wiki for Chrome connected to one explicitly shared tab](https://llm-wiki.net/assets/llm-wiki-chrome-collaboration.png)](https://llm-wiki.net/chrome/)
+
 [Installation, collaboration, security, and troubleshooting guide →](https://llm-wiki.net/chrome/)
 
 ## Click-to-collaborate flow
