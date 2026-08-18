@@ -294,6 +294,31 @@ class CollaborationControllerTests(unittest.TestCase):
         for key, job in self.controller._schedules.items():
             job["timer"].cancel()
 
+    def test_completed_schedule_retention_is_bounded(self) -> None:
+        schedule_ids = []
+        for _ in range(MAX_RETAINED_SCHEDULES):
+            scheduled = self.controller.schedule_snapshot(
+                self.collaboration_id, delay_seconds=3600
+            )
+            schedule_id = scheduled["schedule_id"]
+            schedule_ids.append(schedule_id)
+            job = self.controller._schedules[schedule_id]
+            job["timer"].cancel()
+            job["state"] = "complete"
+            job["result"] = {"synthetic": True}
+
+        with self.assertRaisesRegex(CollaborationError, "await retrieval"):
+            self.controller.schedule_snapshot(
+                self.collaboration_id, delay_seconds=3600
+            )
+
+        retrieved = self.controller.schedule_result(schedule_ids[0])
+        self.assertEqual(retrieved["state"], "complete")
+        replacement = self.controller.schedule_snapshot(
+            self.collaboration_id, delay_seconds=3600
+        )
+        self.controller.schedule_cancel(replacement["schedule_id"])
+
 
 if __name__ == "__main__":
     unittest.main()
