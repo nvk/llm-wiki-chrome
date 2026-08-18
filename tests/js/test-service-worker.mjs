@@ -308,7 +308,19 @@ nativePort.onMessage.emit({
   protocol: PROTOCOL, type: "mutation-authorized", job_id: JOB_ID, authorized: true,
 });
 await waitFor(() => stored.activeJobState?.state === "awaiting-user");
-assert.equal((await runtimeMessage({type: "authorize-current-job", authorized: true})).updated, true);
+assert.equal(stored.activeJobState.job_id, JOB_ID);
+// Approvals for a stale, missing, or malformed job id must not resolve the boundary.
+assert.equal(await runtimeMessage({type: "authorize-current-job", authorized: true}), undefined);
+assert.equal(await runtimeMessage(
+  {type: "authorize-current-job", job_id: "9".repeat(36), authorized: true},
+), undefined);
+assert.equal(await runtimeMessage(
+  {type: "authorize-current-job", job_id: "not-a-job-id", authorized: true},
+), undefined);
+assert.equal(stored.activeJobState?.state, "awaiting-user");
+assert.equal((await runtimeMessage(
+  {type: "authorize-current-job", job_id: JOB_ID, authorized: true},
+)).updated, true);
 const manualResult = await nativePort.next((message) => message.type === "result", manualStart);
 assert.equal(manualResult.status, "ok");
 await waitFor(() => stored.activeJobState === null);

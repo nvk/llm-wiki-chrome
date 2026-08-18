@@ -393,6 +393,7 @@ function requestMutation(job) {
     .catch(() => {});
   setJobState({
     state: "authorizing",
+    job_id: job.jobId,
     action_count: job.executor?.actionCount || 0,
     max_actions: job.executor?.program?.limits?.max_actions || 0,
     mutation_started: false,
@@ -430,6 +431,7 @@ function handleMutationAuthorization(message, port) {
       setConnectorState("authorizing", "Waiting for local protected-action confirmation.").catch(() => {});
       setJobState({
         state: "awaiting-user",
+        job_id: job.jobId,
         action_count: job.executor?.actionCount || 0,
         max_actions: job.executor?.program?.limits?.max_actions || 0,
         mutation_started: false,
@@ -440,6 +442,7 @@ function handleMutationAuthorization(message, port) {
     setConnectorState("busy", "A bounded browser job is running.").catch(() => {});
     setJobState({
       state: "running",
+      job_id: job.jobId,
       action_count: job.executor?.actionCount || 0,
       max_actions: job.executor?.program?.limits?.max_actions || 0,
       mutation_started: job.executor?.mutationStarted === true,
@@ -508,6 +511,7 @@ async function executeJob(message, port) {
     onProgress: ({actionCount, maxActions, mutationStarted}) => {
       setJobState({
         state: job.boundary ? "authorizing" : "running",
+        job_id: job.jobId,
         action_count: actionCount,
         max_actions: maxActions,
         mutation_started: mutationStarted,
@@ -520,6 +524,7 @@ async function executeJob(message, port) {
   await setConnectorState("busy", "A bounded browser job is running.").catch(() => {});
   await setJobState({
     state: "running",
+    job_id: jobId,
     action_count: 0,
     max_actions: program.limits.max_actions,
     mutation_started: false,
@@ -687,7 +692,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })).then(() => sendResponse({updated: true})).catch(() => sendResponse({updated: false}));
     return true;
   }
-  if (message?.type === "authorize-current-job" && activeJob?.boundary && activeJob.externalAuthorized) {
+  if (message?.type === "authorize-current-job" && JOB_ID.test(message.job_id || "") &&
+      activeJob?.boundary && activeJob.externalAuthorized && activeJob.jobId === message.job_id) {
     const approved = message.authorized === true;
     recordDecision(approved ? "manual-approved" : "manual-denied").catch(() => {});
     finishBoundary(activeJob, approved);

@@ -19,6 +19,7 @@ const authorizationButtons = document.getElementById("authorization-buttons");
 const approveJobButton = document.getElementById("approve-job");
 const denyJobButton = document.getElementById("deny-job");
 let connectFailure = "";
+let lastJobId = "";
 
 const labels = {
   connected: "Local connector is ready",
@@ -87,13 +88,14 @@ function renderCollaborations(collaborations, connectorReady) {
 function renderJob(job) {
   const active = job && ["running", "authorizing", "awaiting-user", "cancelling"].includes(job.state);
   jobElement.hidden = !active;
-  if (!active) return;
+  if (!active) { lastJobId = ""; return; }
   const maximum = Number.isInteger(job.max_actions) && job.max_actions > 0 ? job.max_actions : 1;
   const count = Number.isInteger(job.action_count) ? Math.max(0, Math.min(job.action_count, maximum)) : 0;
   jobState.textContent = job.state === "awaiting-user" ? "Confirmation required" : job.state === "authorizing"
     ? "Authorizing"
     : job.state === "cancelling" ? "Cancelling" : "Running";
   jobState.className = `pill ${job.state}`;
+  lastJobId = typeof job.job_id === "string" ? job.job_id : "";
   jobProgress.max = maximum;
   jobProgress.value = count;
   jobDetail.textContent = `${count} of at most ${maximum} bounded actions` +
@@ -160,11 +162,11 @@ authorizationMode.addEventListener("change", () => {
 });
 
 approveJobButton.addEventListener("click", () => {
-  send({type: "authorize-current-job", authorized: true}).finally(refresh);
+  send({type: "authorize-current-job", job_id: lastJobId, authorized: true}).finally(refresh);
 });
 
 denyJobButton.addEventListener("click", () => {
-  send({type: "authorize-current-job", authorized: false}).finally(refresh);
+  send({type: "authorize-current-job", job_id: lastJobId, authorized: false}).finally(refresh);
 });
 
 refresh();
