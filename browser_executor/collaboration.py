@@ -13,6 +13,9 @@ from .client import BrowserExecutorClient, ClientError
 from .protocol import BROWSER_PROTOCOL, canonical_program_sha256, validate_program
 from .policy import LocalBrowserPolicy, PolicyError
 
+MAX_ACTIVE_SCHEDULES = 4
+MAX_RETAINED_SCHEDULES = 32
+
 DRIVER_ID = "agent-collaboration"
 DRIVER_VERSION = "1"
 COLLABORATION_ID = re.compile(r"^[a-f0-9]{64}$")
@@ -1283,6 +1286,27 @@ class BrowserCollaborationController:
         timer = threading.Timer(delay_seconds, execute)
         timer.daemon = True
         with self._schedule_lock:
+            active = sum(
+                1
+                for job in self._schedules.values()
+                if job["state"] in {"scheduled", "running"}
+            )
+            if active >= MAX_ACTIVE_SCHEDULES:
+                raise CollaborationError("too many active scheduled snapshots")
+            while len(self._schedules) >= MAX_RETAINED_SCHEDULES:
+                terminal = next(
+                    (
+                        key
+                        for key, job in self._schedules.items()
+                        if job["state"] in {"cancelled", "failed"}
+                    ),
+                    None,
+                )
+                if terminal is None:
+                    raise CollaborationError(
+                        "too many completed scheduled snapshots await retrieval"
+                    )
+                del self._schedules[terminal]
             self._schedules[schedule_id] = {
                 "state": "scheduled",
                 "timer": timer,
