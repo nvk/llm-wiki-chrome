@@ -68,12 +68,12 @@ async function recordDecision(decision) {
 }
 
 async function groupWorkspaceTabs(workspace) {
-  if (!chrome.tabs?.group || !chrome.tabGroups?.update || !workspace.collaborations.length) return;
+  if (!chrome.tabs?.group || !chrome.tabGroups?.update) return;
   const tabIds = workspace.collaborations.map((value) => value.tab_id);
   try {
     const groupId = await chrome.tabs.group({tabIds});
     await chrome.tabGroups.update(groupId, {title: "LLM Wiki", color: "green", collapsed: false});
-    await chrome.storage.session.set({[TAB_GROUP_KEY]: groupId});
+    await chrome.storage.session.set({[TAB_GROUP_KEY]: {groupId, tabIds}});
   } catch (_error) {
     // Grouping is presentation only; exact grants remain the authority boundary.
   }
@@ -191,7 +191,26 @@ async function persistWorkspace(workspace, removed = []) {
       }).catch(() => {});
     }
   }
-  await groupWorkspaceTabs(workspace);
+  if (!workspace.collaborations.length) {
+    // No grants remain: release the group on every tab ever grouped by this
+    // workspace (a tab revoked earlier stays in the group until now) and
+    // forget the stored group id instead of leaving an empty LLM Wiki group.
+    // All ids come from grant state, so no tab enumeration is needed.
+    if (chrome.tabs?.ungroup) {
+      const stored = await chrome.storage.session.get(TAB_GROUP_KEY).catch(() => ({}));
+      const memberIds = new Set(stored[TAB_GROUP_KEY]?.tabIds || []);
+      for (const value of removed) memberIds.add(value.tab_id);
+      const survivorIds = [];
+      for (const tabId of memberIds) {
+        const tab = await chrome.tabs.get(tabId).catch(() => null);
+        if (Number.isInteger(tab?.id)) survivorIds.push(tab.id);
+      }
+      if (survivorIds.length) await chrome.tabs.ungroup(survivorIds).catch(() => {});
+    }
+    await chrome.storage.session.remove(TAB_GROUP_KEY).catch(() => {});
+  } else {
+    await groupWorkspaceTabs(workspace);
+  }
   await publishWorkspace(workspace).catch(() => {});
 }
 

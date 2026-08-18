@@ -70,6 +70,8 @@ const tabs = new Map([
 ]);
 let attached = false;
 let panelBehavior = null;
+const ungrouped = [];
+let nextGroupId = 7;
 const openedPanels = [];
 let exposeSensitiveTabFields = true;
 
@@ -78,12 +80,18 @@ globalThis.chrome = {
     session: {
       set: async (value) => Object.assign(stored, value),
       get: async (key) => ({[key]: stored[key]}),
+      remove: async (key) => {
+        delete stored[key];
+      },
     },
   },
   action: {
     setBadgeText: async ({tabId, text}) => badges.set(tabId, text),
     setBadgeBackgroundColor: async () => {},
     onClicked: new EventHook(),
+  },
+  tabGroups: {
+    update: async () => ({}),
   },
   sidePanel: {
     open: async (options) => openedPanels.push(structuredClone(options)),
@@ -119,11 +127,41 @@ globalThis.chrome = {
     get: async (tabId) => {
       const value = tabs.get(tabId);
       if (!value) throw new Error("synthetic tab is closed");
-      const result = structuredClone(value);
-      if (!exposeSensitiveTabFields) delete result.url;
+      const result = {};
+      for (const [key, field] of Object.entries(value)) {
+        if (key === "groupId") continue;
+        if (!exposeSensitiveTabFields && key === "url") continue;
+        result[key] = field;
+      }
       return result;
     },
+    group: async ({tabIds}) => {
+      // Chrome semantics: each call creates a fresh group; tabs move into it,
+      // and any prior group left empty is destroyed.
+      const groupId = nextGroupId;
+      nextGroupId += 1;
+      for (const value of tabs.values()) {
+        if (value.groupId !== undefined && !tabIds.includes(value.id)) delete value.groupId;
+      }
+      for (const tabId of tabIds) {
+        const value = tabs.get(tabId);
+        if (value) value.groupId = groupId;
+      }
+      return groupId;
+    },
+    ungroup: async (tabIds) => {
+      ungrouped.push([...tabIds]);
+      for (const tabId of tabIds) {
+        const value = tabs.get(tabId);
+        if (value) delete value.groupId;
+      }
+    },
     query: async (query) => {
+      if (Number.isInteger(query?.groupId)) {
+        return [...tabs.values()]
+          .filter((value) => value.groupId === query.groupId)
+          .map((value) => ({id: value.id, windowId: value.windowId}));
+      }
       assert.deepEqual(query, {active: true, lastFocusedWindow: true});
       return [...tabs.values()].filter((value) => value.active).map((value) => ({
         id: value.id,
@@ -382,9 +420,19 @@ const navigated = await waitFor(() => {
 assert.notEqual(navigated.collaboration_id, prior.collaboration_id);
 assert.equal(navigated.origin, prior.origin);
 
+// The workspace must be grouped while grants are active.
+await waitFor(() => Number.isInteger(stored.workspaceTabGroup?.groupId));
+assert.ok(tabs.get(1).groupId !== undefined || tabs.get(2).groupId !== undefined);
+
 tabs.get(1).url = "https://other.invalid/synthetic";
 chrome.tabs.onUpdated.emit(1, {url: tabs.get(1).url});
 await waitFor(() => stored.collaborationWorkspace.collaborations.length === 0);
 assert.equal(badges.get(1), "");
+
+// Draining the last grant must release the group: surviving shared tabs are
+// ungrouped and the stored group id is forgotten, leaving no empty group behind.
+await waitFor(() => stored.workspaceTabGroup === undefined);
+assert.ok(ungrouped.length >= 1);
+assert.deepEqual([...tabs.values()].filter((value) => value.groupId !== undefined), []);
 
 process.stdout.write("ok\n");
