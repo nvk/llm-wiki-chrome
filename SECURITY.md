@@ -1,6 +1,6 @@
 # Security and content boundary
 
-This private repository contains code for a bounded local browser executor. It
+This public repository contains code for a bounded local browser executor. It
 does not make browser automation safe by itself and is not an authorization
 boundary for provider effects.
 
@@ -143,5 +143,5 @@ pending journal and read-back verification remain authoritative after that
 boundary.
 
 Never commit or log real resources, browser content, cookies, credentials,
-captures, plans, receipts, or results. Report security concerns privately to the
-repository owner.
+captures, plans, receipts, or results. Report security concerns through the
+repository's private vulnerability-reporting channel rather than a public issue.

@@ -1,9 +1,9 @@
-# Private llm-wiki Browser Executor Instructions
+# Public llm-wiki Browser Executor Instructions
 
-This repository is a private execution tool, never a content store or a
+This repository is a public execution tool, never a content store or a
 general-purpose browser agent.
 
-- Keep the repository private.
+- Keep the repository public, content-free, and safe to clone and inspect.
 - Commit only executable code, manifests, schemas, documentation, tests, and
   synthetic fixtures.
 - Never commit real URLs, resource identifiers, page content, captures,

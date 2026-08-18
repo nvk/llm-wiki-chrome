@@ -1,8 +1,13 @@
 # LLM Wiki for Chrome
 
-Private, content-free execution substrate for targeted llm-wiki adapters. It
+Public, content-free execution substrate for targeted llm-wiki adapters. It
 provides one Chrome extension, one allowlisted Native Messaging host, a private
 Unix-socket relay, and a versioned typed-job contract.
+
+The extension and local connector source are public. Browser grants, page data,
+credentials, private result slots, and runtime sockets remain local and are
+never repository content. Public source availability is not a Chrome Web Store
+release or permission to publish user data.
 
 This is **not** an autonomous natural-language browser agent. It exposes a small
 structured agent tool surface—shared tabs, accessibility snapshot, viewport
@@ -18,7 +23,7 @@ verification for consequential workflows.
 The extension does not need persistent site access or per-page Chrome host
 registration. The user opens an HTTPS page and clicks the extension action.
 Its Chrome-facing name is **LLM Wiki for Chrome**; browser-executor terminology
-is kept only for the private protocol and implementation.
+is kept only for the internal protocol and implementation.
 That Chrome user gesture creates a fresh ephemeral collaboration grant bound to
 the exact tab, URL, and origin. Clicking additional tabs builds an explicit
 workspace of up to 16 grants; the executor never enumerates unrelated tabs.
@@ -58,7 +63,7 @@ projection on the exact exposed tab immediately before the governed mutation
 boundary and fails closed on drift. The expected hash remains a private value;
 neither it nor the projected page content is shown in the side panel.
 
-Provider adapters use the private client directly:
+Provider adapters use the bundled client directly:
 
 ```python
 from browser_executor.client import BrowserExecutorClient
@@ -185,7 +190,7 @@ local agent through fixed MCP tools OR a targeted provider adapter
   -> private result slots returned only to the targeted adapter
 ```
 
-Public llm-wiki may see this repository's route-free `self-test` adapter
+llm-wiki may see this repository's route-free `self-test` adapter
 manifest, but it never routes an external edit or research request directly to
 the executor.
 
@@ -195,9 +200,9 @@ The installable product is split at Chrome's security boundary:
 
 - **`llm-wiki-chrome` native companion:** the Python client, fixed MCP server,
   Native Messaging host, installer, diagnostics, and packaged extension assets;
-- **LLM Wiki for Chrome:** the MV3 extension ZIP, intended for a private Chrome
-  Web Store listing after explicit publication approval. Loading the unpacked
-  path remains the development workflow.
+- **LLM Wiki for Chrome:** the public-source MV3 extension ZIP. Chrome Web Store
+  publication remains a separate release step requiring explicit approval;
+  loading the unpacked path remains the development workflow.
 
 The development-only Homebrew formula is available from `nvk/tap` as a HEAD
 build. It is deliberately not a stable release:

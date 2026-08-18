@@ -13,10 +13,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class AdapterAndSecurityTests(unittest.TestCase):
-    def test_manifest_is_private_route_free_and_content_free(self) -> None:
+    def test_manifest_is_public_route_free_and_content_free(self) -> None:
         manifest = json.loads((ROOT / ".llm-wiki-adapter.json").read_text(encoding="utf-8"))
         extension = json.loads((ROOT / "extension" / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["distribution"], "private")
+        self.assertEqual(manifest["distribution"], "public")
         self.assertEqual(manifest["routes"], [])
         self.assertFalse(manifest["writes_wiki"])
         self.assertEqual(manifest["network"], "none")

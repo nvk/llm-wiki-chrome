@@ -98,16 +98,16 @@ verification deliberately remain in targeted adapters.
 Arbitrary sites, ambient tabs, raw JavaScript, raw CDP, and extension-owned
 intent remain out of scope.
 
-## Deferred Homebrew packaging
+## Homebrew packaging
 
-Package the shared connector only after the consolidated `0.1.0` candidate has
-working typed execution, provider parity, upgrade/rollback tests, and explicit
-release approval.
+The shared connector has a development-only HEAD formula. A stable formula
+still requires the consolidated `0.1.0` candidate, provider parity,
+upgrade/rollback tests, and explicit release approval.
 
-Preferred distribution:
+Current distribution:
 
-- private tap rather than the public `nvk/tap`;
-- formula `llm-wiki-browser-executor`;
+- public source through `nvk/tap`;
+- formula `llm-wiki-chrome`;
 - Python application and extension assets under `libexec`/`share` with stable
   `opt`-linked launcher paths;
 - explicit `install`, `status`, `self-test`, and `uninstall` commands;
