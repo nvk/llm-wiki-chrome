@@ -180,6 +180,14 @@ async function persistWorkspace(workspace, removed = []) {
       }).catch(() => {});
     }
   }
+  // A revoked grant must stop looking controlled immediately. Chrome only
+  // moves the tab ids passed to tabs.group(); omitted tabs remain in their
+  // previous group, so regrouping the surviving grants is not sufficient.
+  const removedTabIds = [...new Set(removed.map((value) => value.tab_id)
+    .filter((tabId) => Number.isInteger(tabId)))];
+  if (removedTabIds.length && chrome.tabs?.ungroup) {
+    await chrome.tabs.ungroup(removedTabIds).catch(() => {});
+  }
   for (const value of workspace.collaborations) {
     await showCollaborationMarker(value);
     await chrome.action.setBadgeBackgroundColor({tabId: value.tab_id, color: "#317258"}).catch(() => {});

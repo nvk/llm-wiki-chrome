@@ -136,13 +136,11 @@ globalThis.chrome = {
       return result;
     },
     group: async ({tabIds}) => {
-      // Chrome semantics: each call creates a fresh group; tabs move into it,
-      // and any prior group left empty is destroyed.
+      // Without groupId, Chrome creates a fresh group and moves only the
+      // specified tabs into it. Omitted tabs remain in their previous groups
+      // until they are explicitly ungrouped.
       const groupId = nextGroupId;
       nextGroupId += 1;
-      for (const value of tabs.values()) {
-        if (value.groupId !== undefined && !tabIds.includes(value.id)) delete value.groupId;
-      }
       for (const tabId of tabIds) {
         const value = tabs.get(tabId);
         if (value) value.groupId = groupId;
@@ -421,6 +419,7 @@ assert.equal((await runtimeMessage({
 })).stopped, true);
 await waitFor(() => stored.collaborationWorkspace.collaborations.length === 1);
 assert.equal(badges.get(2), "");
+assert.equal(tabs.get(2).groupId, undefined);
 
 const prior = stored.collaborationWorkspace.collaborations[0];
 tabs.get(1).url = `${tabs.get(1).url}/details`;
