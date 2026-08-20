@@ -1,7 +1,7 @@
 {
   "protocol": "llm-wiki-adapter/v1",
   "id": "browser-execution",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Public content-free exact-target typed browser execution substrate used by targeted llm-wiki adapters.",
   "distribution": "public",
   "entrypoint": [".venv/bin/python", "adapter.py"],

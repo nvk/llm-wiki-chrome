@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -9,11 +10,24 @@ import unittest
 import zipfile
 from pathlib import Path
 
+from browser_executor.mcp_server import SERVER_VERSION
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackagingTests(unittest.TestCase):
+    def test_release_versions_match_across_package_extension_and_manifests(self) -> None:
+        project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        package_version = re.search(r'^version = "([^"]+)"$', project, re.MULTILINE)
+        self.assertIsNotNone(package_version)
+        expected = package_version.group(1)
+        adapter = json.loads((ROOT / ".llm-wiki-adapter.json").read_text(encoding="utf-8"))
+        extension = json.loads((ROOT / "extension" / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(adapter["version"], expected)
+        self.assertEqual(extension["version"], expected)
+        self.assertEqual(SERVER_VERSION, expected)
+
     def test_project_installs_one_unified_cli_and_extension_assets(self) -> None:
         project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn('llm-wiki-chrome = "browser_executor.cli:main"', project)
