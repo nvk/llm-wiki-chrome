@@ -22,6 +22,7 @@ const REMOTE_OBJECT_TYPES = new Set([
 ]);
 const RETRYABLE_WAIT_CODES = new Set([
   "element-not-found", "element-state-mismatch", "element-ambiguous", "target-not-ready",
+  "target-focus-drift", "private-value-mismatch",
 ]);
 const RECOVERABLE_BRANCH_CODES = new Set([
   "element-not-found", "element-state-mismatch", "element-ambiguous",
@@ -196,6 +197,9 @@ export class BrowserExecutor {
       dispatch_key_chord: () => this.dispatchKeyChord(action.keys),
       insert_private_text: () => this.insertPrivateText(action.slot, action.replace_all),
       assert_ax_private_value: () => this.assertFocusedPrivateValue(action.slot),
+      wait_ax_private_value: () => this.waitFor(
+        () => this.assertFocusedPrivateValue(action.slot), action.timeout_ms,
+      ),
       assert_ax_private_sha256: () => this.assertAXPrivateSHA256(action),
       extract_ax: () => this.extractAX(action),
       extract_ax_collection: () => this.extractAX(action),
@@ -242,7 +246,14 @@ export class BrowserExecutor {
       if (error instanceof ExecutionError) throw error;
       fail("collaboration-target-lost");
     }
-    await this.assertExactTarget();
+    // Chrome reports window/tab focus asynchronously on some platforms. Give
+    // the activation request a short bounded settle window, but keep later
+    // focus drift fail-closed.
+    await this.waitFor(
+      () => this.assertExactTarget(),
+      Math.min(1000, this.program.limits.timeout_ms),
+      10,
+    );
   }
 
   async waitForTab(expectedUrl) {
@@ -405,10 +416,10 @@ export class BrowserExecutor {
     }
   }
 
-  async waitFor(operation, timeoutMs) {
+  async waitFor(operation, timeoutMs, maximumAttempts = this.program.limits.max_repeat) {
     const stop = Math.min(this.deadline, Date.now() + timeoutMs);
-    const attempts = this.program.limits.max_repeat;
-    const delay = attempts > 1 ? Math.max(20, Math.floor(timeoutMs / (attempts - 1))) : timeoutMs;
+    const attempts = Math.max(1, Math.min(maximumAttempts, 20));
+    const delay = attempts > 1 ? Math.max(20, Math.floor(timeoutMs / attempts)) : timeoutMs;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       this.checkDeadline();
       try {
@@ -722,32 +733,37 @@ export class BrowserExecutor {
   }
 
   async captureViewport(action) {
-    const result = await this.command("Page.captureScreenshot", {
-      format: "jpeg",
-      quality: action.quality,
-      fromSurface: true,
-      captureBeyondViewport: false,
-      optimizeForSpeed: true,
-    });
-    if (typeof result.data !== "string" || !result.data || result.data.length % 4 !== 0 ||
-        !/^[A-Za-z0-9+/]*={0,2}$/u.test(result.data)) {
-      fail("screenshot-invalid");
+    let quality = action.quality;
+    while (quality >= 10) {
+      const result = await this.command("Page.captureScreenshot", {
+        format: "jpeg",
+        quality,
+        fromSurface: true,
+        captureBeyondViewport: false,
+        optimizeForSpeed: true,
+      });
+      if (typeof result.data !== "string" || !result.data || result.data.length % 4 !== 0 ||
+          !/^[A-Za-z0-9+/]*={0,2}$/u.test(result.data)) {
+        fail("screenshot-invalid");
+      }
+      let size;
+      try {
+        size = atob(result.data).length;
+      } catch (_error) {
+        fail("screenshot-invalid");
+      }
+      if (size <= action.max_bytes) {
+        this.privateResults[action.private_result] = {
+          mime_type: "image/jpeg",
+          data_base64: result.data,
+        };
+        this.assertPrivateResultsBounded(action.private_result);
+        return;
+      }
+      if (quality === 10) break;
+      quality = Math.max(10, quality - 10);
     }
-    if (result.data.length > Math.ceil(action.max_bytes / 3) * 4 + 4) {
-      fail("screenshot-too-large");
-    }
-    let size;
-    try {
-      size = atob(result.data).length;
-    } catch (_error) {
-      fail("screenshot-invalid");
-    }
-    if (size > action.max_bytes) fail("screenshot-too-large");
-    this.privateResults[action.private_result] = {
-      mime_type: "image/jpeg",
-      data_base64: result.data,
-    };
-    this.assertPrivateResultsBounded(action.private_result);
+    fail("screenshot-too-large");
   }
 
   async storeScreenshot(action, parameters) {

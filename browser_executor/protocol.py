@@ -53,6 +53,7 @@ ALLOWED_OPERATIONS = {
     "dispatch_key_chord",
     "insert_private_text",
     "assert_ax_private_value",
+    "wait_ax_private_value",
     "assert_ax_private_sha256",
     "extract_ax",
     "extract_ax_collection",
@@ -148,6 +149,7 @@ ACTION_KEYS = {
     "dispatch_key_chord": {"op", "keys"},
     "insert_private_text": {"op", "slot", "replace_all"},
     "assert_ax_private_value": {"op", "slot"},
+    "wait_ax_private_value": {"op", "slot", "timeout_ms"},
     "assert_ax_private_sha256": {"op", "slot", "locator", "fields", "max_items"},
     "extract_ax": {"op", "locator", "fields", "private_result", "max_items"},
     "extract_ax_collection": {"op", "locator", "fields", "private_result", "max_items"},
@@ -535,7 +537,7 @@ def _validate_action(
             action.get("option_locator"), f"action[{index}].option_locator"
         )
         _validate_ax_locator_shape(action["option_locator"])
-    if operation in {"wait_ax", "wait_dom"}:
+    if operation in {"wait_ax", "wait_dom", "wait_ax_private_value"}:
         timeout = action.get("timeout_ms")
         if type(timeout) is not int or not 50 <= timeout <= 300000:
             raise ProtocolError("wait timeout_ms must be between 50 and 300000")
@@ -552,6 +554,7 @@ def _validate_action(
     if operation in {
         "insert_private_text",
         "assert_ax_private_value",
+        "wait_ax_private_value",
         "assert_ax_private_sha256",
         "set_private_files",
     }:

@@ -115,6 +115,8 @@ bounded execution slice:
 - a green `LLM Wiki` tab group containing only explicit grants;
 - same-origin open/navigate/history/reload, exact-tab focus/close, semantic
   waits, hover, option selection, drag/drop, and scroll-to-element primitives;
+- bounded activation settling, retrying private-value assertions, and adaptive
+  viewport JPEG quality for transient browser/UI state;
 - flattened, bounded accessibility collection across attached child-frame
   targets, with session-bound geometry and interactions; semantic AX discovery
   also covers open shadow trees without enabling arbitrary DOM traversal;
@@ -154,7 +156,8 @@ bounded execution slice:
   ignores headers, bodies, cookies, initiators, and security details;
 - bounded exact-tab console-API capture that retains only scalar arguments and
   never evaluates or dereferences remote objects;
-- typed click, focus, key-chord, and private text-insertion actions;
+- typed click, focus, key-chord, private text-insertion, and retrying
+  private-value assertion actions;
 - cancellation, target-focus drift detection, result-size limits, and
   best-effort debugger cleanup (cancellation stops at the next bounded action
   and cannot roll back a mutation that already started);

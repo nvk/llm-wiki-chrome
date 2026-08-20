@@ -61,11 +61,13 @@ grants; it returns no URL, origin, identifier, or page content.
 
 The extension independently validates the signed program and private-slot
 shape. It accepts an HTTPS origin only when the program's collaboration ID,
-exact URL, and origin match the live user grant. The extension activates that exact tab, aborts on
-target or focus drift, uses only a
+exact URL, and origin match the live user grant. The extension gives Chrome a
+short bounded window to report the requested tab/window activation, then aborts
+on later target or focus drift. It uses only a
 hardcoded DOM/Accessibility/Input/Page/Log/Network/Runtime/Performance/Target CDP allowlist, and detaches the debugger
-in a `finally` path. Waits retry only locator-not-ready conditions; cancellation,
-deadline, debugger, and target errors fail immediately. Public results are
+in a `finally` path. Waits retry only locator-not-ready or focused-value
+propagation conditions; cancellation, deadline, debugger, and post-activation
+target errors fail immediately. Public results are
 filtered to declared content-free counters, while bounded page data is returned
 only through declared private result slots. Viewport scrolling and scrolling
 collection are bounded, typed read actions; long-list collection is capped by

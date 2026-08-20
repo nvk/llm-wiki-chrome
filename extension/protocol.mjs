@@ -6,7 +6,7 @@ const ALLOWED_OPERATIONS = new Set([
   "attach_debugger", "detach_debugger", "wait_ax", "wait_dom", "assert_ax",
   "first_success", "click_ax", "click_dom", "focus_ax", "hover_ax", "drag_ax",
   "select_ax_option", "scroll_ax_into_view", "dispatch_key_chord",
-  "insert_private_text", "assert_ax_private_value", "extract_ax",
+  "insert_private_text", "assert_ax_private_value", "wait_ax_private_value", "extract_ax",
   "assert_ax_private_sha256",
   "extract_ax_collection", "collect_ax_by_scrolling", "capture_viewport_private",
   "capture_region_private", "capture_full_page_private", "extract_ax_geometry",
@@ -76,6 +76,7 @@ const ACTION_KEYS = new Map([
   ["dispatch_key_chord", new Set(["op", "keys"])],
   ["insert_private_text", new Set(["op", "slot", "replace_all"])],
   ["assert_ax_private_value", new Set(["op", "slot"])],
+  ["wait_ax_private_value", new Set(["op", "slot", "timeout_ms"])],
   ["assert_ax_private_sha256", new Set(["op", "slot", "locator", "fields", "max_items"])],
   ["extract_ax", new Set(["op", "locator", "fields", "private_result", "max_items"])],
   ["extract_ax_collection", new Set(["op", "locator", "fields", "private_result", "max_items"])],
@@ -303,7 +304,7 @@ function validateAction(action, program, index) {
     validateLocator(action.option_locator, `Action ${index} option locator`);
     validateAXLocatorShape(action.option_locator);
   }
-  if (["wait_ax", "wait_dom"].includes(action.op) &&
+  if (["wait_ax", "wait_dom", "wait_ax_private_value"].includes(action.op) &&
       (!Number.isInteger(action.timeout_ms) || action.timeout_ms < 50 || action.timeout_ms > 300000)) {
     throw new Error("An action timeout is invalid.");
   }
@@ -313,7 +314,8 @@ function validateAction(action, program, index) {
     throw new Error("A key chord is invalid.");
   }
   if ([
-    "insert_private_text", "assert_ax_private_value", "assert_ax_private_sha256", "set_private_files",
+    "insert_private_text", "assert_ax_private_value", "wait_ax_private_value",
+    "assert_ax_private_sha256", "set_private_files",
   ].includes(action.op) &&
       !program.private_slots.includes(action.slot)) {
     throw new Error("An action references an undeclared private slot.");
