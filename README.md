@@ -100,8 +100,7 @@ side panel.
 
 ## Development status
 
-The current development branch extends the `0.0.1` foundation with the first
-bounded execution slice:
+Release `0.1.0` consolidates the first bounded execution slice:
 
 - strict program hashing and validation;
 - cross-language policy-decision tests for the Python client and MV3 validator;
@@ -115,6 +114,8 @@ bounded execution slice:
 - a green `LLM Wiki` tab group containing only explicit grants;
 - same-origin open/navigate/history/reload, exact-tab focus/close, semantic
   waits, hover, option selection, drag/drop, and scroll-to-element primitives;
+- bounded activation settling, retrying private-value assertions, and adaptive
+  viewport JPEG quality for transient browser/UI state;
 - flattened, bounded accessibility collection across attached child-frame
   targets, with session-bound geometry and interactions; semantic AX discovery
   also covers open shadow trees without enabling arbitrary DOM traversal;
@@ -154,7 +155,8 @@ bounded execution slice:
   ignores headers, bodies, cookies, initiators, and security details;
 - bounded exact-tab console-API capture that retains only scalar arguments and
   never evaluates or dereferences remote objects;
-- typed click, focus, key-chord, and private text-insertion actions;
+- typed click, focus, key-chord, private text-insertion, and retrying
+  private-value assertion actions;
 - cancellation, target-focus drift detection, result-size limits, and
   best-effort debugger cleanup (cancellation stops at the next bounded action
   and cannot roll back a mutation that already started);
@@ -163,9 +165,9 @@ bounded execution slice:
 - a content-free extension status panel with connected, running, authorization,
   and failure states.
 
-This branch is not a release or an installed provider replacement. Targeted
-adapter shadow runs, provider-owned verification, upgrade/rollback testing, and
-explicit release approval remain required before a consolidated `0.1.0`.
+The release is still an execution substrate, not a provider workflow. Targeted
+adapters remain responsible for provider semantics, revision checks, durable
+journals, idempotency, and independent read-back verification.
 
 ## Repository boundary
 
@@ -208,11 +210,10 @@ The installable product is split at Chrome's security boundary:
   publication remains a separate release step requiring explicit approval;
   loading the unpacked path remains the development workflow.
 
-The development-only Homebrew formula is available from `nvk/tap` as a HEAD
-build. It is deliberately not a stable release:
+The stable Homebrew formula is available from `nvk/tap`:
 
 ```sh
-brew install --HEAD nvk/tap/llm-wiki-chrome
+brew install nvk/tap/llm-wiki-chrome
 llm-wiki-chrome install
 llm-wiki-chrome doctor
 ```

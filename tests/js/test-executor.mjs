@@ -309,7 +309,7 @@ async function mutationProgram() {
         locator: {role: "textbox", within: {role: "dialog", name: "Synthetic editor"}},
       },
       {op: "insert_private_text", slot: "edit.value", replace_all: true},
-      {op: "assert_ax_private_value", slot: "edit.value"},
+      {op: "wait_ax_private_value", slot: "edit.value", timeout_ms: 200},
       {op: "before_mutation"},
       {op: "click_ax", locator: {role: "button", name: "Replace"}},
       {op: "detach_debugger"},
@@ -636,6 +636,47 @@ async function testMutationBoundaryAndPrivateInsertion() {
   assert.equal(fake.attached, false);
 }
 
+async function testPrivateValueWaitRetriesTransientAXLag() {
+  const program = await mutationProgram();
+  const fake = new FakeChrome(program.target.url, "mutation");
+  const original = fake.command.bind(fake);
+  let staleReads = 1;
+  fake.command = (method, parameters, sessionId) => {
+    const result = original(method, parameters, sessionId);
+    if (method === "Accessibility.getFullAXTree" && fake.insertedText && staleReads > 0) {
+      staleReads -= 1;
+      const textbox = result.nodes.find((node) => node.nodeId === "textbox");
+      textbox.value = {value: ""};
+    }
+    return result;
+  };
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac", targetTabId: fake.tab.id});
+  const result = await executor.run(program, {"edit.value": "Synthetic replacement"}, async () => true);
+  assert.equal(result.public.mutation_started, true);
+  assert.equal(staleReads, 0);
+  assert.equal(fake.clicks, 1);
+}
+
+async function testInitialFocusWaitsForChromeToSettle() {
+  const program = await mutationProgram();
+  const fake = new FakeChrome(program.target.url, "mutation");
+  let focusChecks = 0;
+  fake.windows.update = async (windowId, changes) => {
+    assert.equal(windowId, fake.window.id);
+    assert.deepEqual(changes, {focused: true});
+    return structuredClone(fake.window);
+  };
+  fake.windows.get = async (windowId) => {
+    assert.equal(windowId, fake.window.id);
+    focusChecks += 1;
+    return {...structuredClone(fake.window), focused: focusChecks >= 2};
+  };
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac", targetTabId: fake.tab.id});
+  const result = await executor.run(program, {"edit.value": "Synthetic replacement"}, async () => true);
+  assert.equal(result.public.mutation_started, true);
+  assert.ok(focusChecks >= 2);
+}
+
 async function testPrivateViewportCapture() {
   const program = await screenshotProgram();
   const fake = new FakeChrome(program.target.url, "read");
@@ -647,6 +688,48 @@ async function testPrivateViewportCapture() {
     data_base64: btoa("synthetic-jpeg-bytes"),
   });
   assert.equal(fake.attached, false);
+}
+
+async function testViewportCaptureReducesQualityBeforeFailingSizeLimit() {
+  const program = await screenshotProgram();
+  const fake = new FakeChrome(program.target.url, "read");
+  const original = fake.command.bind(fake);
+  const qualities = [];
+  fake.command = (method, parameters, sessionId) => {
+    if (method === "Page.captureScreenshot") {
+      qualities.push(parameters.quality);
+      return {data: btoa(parameters.quality > 50 ? "x".repeat(20000) : "small-jpeg")};
+    }
+    return original(method, parameters, sessionId);
+  };
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac", targetTabId: fake.tab.id});
+  const result = await executor.run(program, {}, async () => false);
+  assert.deepEqual(qualities, [70, 60, 50]);
+  assert.equal(result.private["page.viewport"].data_base64, btoa("small-jpeg"));
+}
+
+async function testViewportCaptureStopsAfterMinimumQuality() {
+  const program = await screenshotProgram();
+  const capture = program.actions.find((action) => action.op === "capture_viewport_private");
+  capture.quality = 15;
+  program.program_sha256 = await canonicalProgramHash(program);
+  validateProgram(program);
+  const fake = new FakeChrome(program.target.url, "read");
+  const original = fake.command.bind(fake);
+  const qualities = [];
+  fake.command = (method, parameters, sessionId) => {
+    if (method === "Page.captureScreenshot") {
+      qualities.push(parameters.quality);
+      return {data: btoa("x".repeat(20000))};
+    }
+    return original(method, parameters, sessionId);
+  };
+  const executor = new BrowserExecutor({chromeApi: fake, platform: "mac", targetTabId: fake.tab.id});
+  await assert.rejects(
+    executor.run(program, {}, async () => false),
+    (error) => error instanceof ExecutionError && error.code === "screenshot-too-large",
+  );
+  assert.deepEqual(qualities, [15, 10]);
 }
 
 async function testAdvancedVisualGroundingAndPerformance() {
@@ -927,7 +1010,11 @@ async function testCancellationFailsClosed() {
 await testReadExecutionAndPrivateExtraction();
 await testExecutionRequiresAnExplicitSharedTabId();
 await testMutationBoundaryAndPrivateInsertion();
+await testPrivateValueWaitRetriesTransientAXLag();
+await testInitialFocusWaitsForChromeToSettle();
 await testPrivateViewportCapture();
+await testViewportCaptureReducesQualityBeforeFailingSizeLimit();
+await testViewportCaptureStopsAfterMinimumQuality();
 await testAdvancedVisualGroundingAndPerformance();
 await testViewportScrollAndPrivateLinkMetadata();
 await testScrollingCollectionDeduplicatesAndStopsAtBound();

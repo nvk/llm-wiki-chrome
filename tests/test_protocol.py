@@ -188,6 +188,34 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ProtocolError, "max_items"):
             validate_program(oversized)
 
+    def test_private_value_wait_is_bounded_and_declared(self) -> None:
+        program = load_fixture("google-docs-suggestions-v1.json")
+        waits = [
+            action for action in program["actions"]
+            if action["op"] == "wait_ax_private_value"
+        ]
+        self.assertEqual(len(waits), 2)
+        self.assertEqual(validate_program(program), program)
+
+        undeclared = copy.deepcopy(program)
+        next(
+            action for action in undeclared["actions"]
+            if action["op"] == "wait_ax_private_value"
+        )["slot"] = "edit.undeclared"
+        resign(undeclared)
+        with self.assertRaisesRegex(ProtocolError, "undeclared private slot"):
+            validate_program(undeclared)
+
+        for value in (49, 300001, True):
+            invalid = copy.deepcopy(program)
+            next(
+                action for action in invalid["actions"]
+                if action["op"] == "wait_ax_private_value"
+            )["timeout_ms"] = value
+            resign(invalid)
+            with self.subTest(timeout_ms=value), self.assertRaisesRegex(ProtocolError, "timeout_ms"):
+                validate_program(invalid)
+
     def test_action_count_includes_bounded_branches(self) -> None:
         program = load_fixture("google-docs-suggestions-v1.json")
         program["limits"]["max_actions"] = 3

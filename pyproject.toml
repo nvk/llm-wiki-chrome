@@ -1,6 +1,6 @@
 [project]
 name = "llm-wiki-chrome"
-version = "0.0.1"
+version = "0.1.0"
 requires-python = ">=3.9"
 description = "Public content-free exact-target browser executor for targeted llm-wiki adapters"
 

@@ -83,7 +83,8 @@ five-action receipt. A subsequent two-tab gate also passed: both distinct HTTPS
 grants produced independent snapshots, a scroll routed only to the selected
 second grant, and both collaboration IDs remained stable afterward. The
 isolated harness and targeted-adapter shadow runs remain pending; this source
-state has not been released as an upgrade.
+state is included in the `0.1.0` release. Provider-specific live validation
+remains the responsibility of each targeted adapter.
 
 The parity branch now also implements a controlled green tab group, exact
 same-origin tab lifecycle and navigation, semantic waits/hover/select/drag,
@@ -100,13 +101,13 @@ intent remain out of scope.
 
 ## Homebrew packaging
 
-The shared connector has a development-only HEAD formula. A stable formula
-still requires the consolidated `0.1.0` candidate, provider parity,
-upgrade/rollback tests, and explicit release approval.
+The shared connector has a stable `0.1.0` formula. Provider parity and
+postcondition verification remain adapter-owned rather than release-wide
+claims.
 
 Current distribution:
 
-- public source through `nvk/tap`;
+- public `0.1.0` source through `nvk/tap`;
 - formula `llm-wiki-chrome`;
 - Python application and extension assets under `libexec`/`share` with stable
   `opt`-linked launcher paths;

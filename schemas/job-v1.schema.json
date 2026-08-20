@@ -169,6 +169,15 @@
         "replace_all": {"type": "boolean"}
       }
     },
+    "privateWaitAction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["op", "slot", "timeout_ms"],
+      "properties": {
+        "op": {"const": "wait_ax_private_value"},
+        "slot": {"$ref": "#/$defs/privateField"},
+        "timeout_ms": {"type": "integer", "minimum": 50, "maximum": 300000}
+      }
+    },
     "privateHashAction": {
       "type": "object", "additionalProperties": false,
       "required": ["op", "slot", "locator", "fields", "max_items"],
@@ -421,6 +430,7 @@
         {"$ref": "#/$defs/locatedAction"},
         {"$ref": "#/$defs/waitAction"}, {"$ref": "#/$defs/branchAction"},
         {"$ref": "#/$defs/keyAction"}, {"$ref": "#/$defs/privateAction"},
+        {"$ref": "#/$defs/privateWaitAction"},
         {"$ref": "#/$defs/privateHashAction"},
         {"$ref": "#/$defs/extractAction"}, {"$ref": "#/$defs/scrollCollectionAction"},
         {"$ref": "#/$defs/screenshotAction"},

@@ -9,7 +9,7 @@ from .collaboration import BrowserCollaborationController, collaboration_error_m
 MCP_PROTOCOL = "2025-06-18"
 SUPPORTED_MCP_PROTOCOLS = {MCP_PROTOCOL, "2025-11-25"}
 SERVER_NAME = "llm-wiki-browser-collaboration"
-SERVER_VERSION = "0.0.1"
+SERVER_VERSION = "0.1.0"
 
 
 def _object_schema(
